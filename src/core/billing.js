@@ -35,7 +35,14 @@ export function fiBill(state, fi, monthKeyStr, todayISO) {
   const subscription = round(subscriptionFull * (1 - discount / 100));
   const assessments = (state.assessments || []).filter((a) => a.fiId === fi.id && a.date.startsWith(monthKeyStr));
   const assessmentTotal = assessments.reduce((t, a) => t + a.fee, 0);
-  return { pkg, discount, subscriptionFull, subscription, assessments, assessmentTotal, total: subscription + assessmentTotal };
+  // Optional services, off unless System Admin switches them on after partner agreement.
+  const fees = state.settings.fiFees || {};
+  const mine = (state.loans || []).filter((l) => l.fiId === fi.id);
+  const disbursements = fees.disbursementOn ? mine.filter((l) => l.disbursedAt && l.disbursedAt.startsWith(monthKeyStr)).map((l) => ({ loanId: l.id, businessId: l.businessId, amount: l.offer.principal, fee: round((l.offer.principal * fees.disbursementPct) / 100) })) : [];
+  const collections = fees.collectionOn ? mine.flatMap((l) => (l.schedule || []).filter((i) => i.paidAt && i.paidAt.startsWith(monthKeyStr)).map((i) => ({ loanId: l.id, businessId: l.businessId, n: i.n, amount: i.amount, fee: round((i.amount * fees.collectionPct) / 100) }))) : [];
+  const disbursementTotal = disbursements.reduce((t, x) => t + x.fee, 0);
+  const collectionTotal = collections.reduce((t, x) => t + x.fee, 0);
+  return { pkg, discount, subscriptionFull, subscription, assessments, assessmentTotal, disbursements, disbursementTotal, collections, collectionTotal, total: subscription + assessmentTotal + disbursementTotal + collectionTotal };
 }
 
 export function sponsorCounts(state) {

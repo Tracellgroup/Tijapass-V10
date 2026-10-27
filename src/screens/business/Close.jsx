@@ -43,8 +43,10 @@ export default function Close() {
   const missed = useMemo(() => unclosedPastDays(state, b, t), [state, b, t]);
   const catchUp = missed.length > 0;
   const from = catchUp ? missed[0] : t;
-  const to = catchUp ? addDays(t, -1) : t;
-  const reviewDays = catchUp ? missed : [t];
+  // Recording is never blocked, so if today already has entries the catch-up count also covers today.
+  const todayHasEntries = state.entries.some((e) => e.businessId === b.id && e.date === t && e.status !== "declined");
+  const to = catchUp ? (todayHasEntries ? t : addDays(t, -1)) : t;
+  const reviewDays = catchUp ? (todayHasEntries ? [...missed, t] : missed) : [t];
   const [step, setStep] = useState(0); // 0..reviewDays-1 review, then count, compare, done
   const [counts, setCounts] = useState({});
   const [reasons, setReasons] = useState({}); // channelId -> { key: amount }
@@ -57,7 +59,7 @@ export default function Close() {
           <CheckCircle2 size={48} className="green" style={{ margin: "0 auto" }} />
           <h2>{catchUp ? L("Days closed", "Siku zimefungwa") : L("Day closed", "Siku imefungwa")}</h2>
           <p>{fmtDate(done.from)}{done.from !== done.to ? ` – ${fmtDate(done.to)}` : ""} · {L("closed at", "imefungwa saa")} {fmtTime(done.closedAt)}</p>
-          {Math.abs(done.remainder) > 0.5 && <p className="notice warn">{L("Unexplained difference recorded", "Tofauti isiyoelezeka imeandikwa")}: {money(done.remainder)}</p>}
+          {Math.abs(done.remainder) > 0.5 && <p className="notice warn">{L("Unexplained difference held for TijaPass to resolve with you", "Tofauti isiyoelezeka imewekwa kando ili TijaPass waitatue nawe")}: {money(done.remainder)}</p>}
           <button className="btn primary" onClick={() => go("home")}>{L("Back home", "Rudi nyumbani")}</button>
         </div>
       </Card>
@@ -164,7 +166,7 @@ export default function Close() {
                           </div>
                         );
                       })}
-                      <p className="small">{L("Still unexplained", "Bado haielezeki")}: <b className={rem > 0.5 ? "amber" : "green"}>{money(Math.max(0, rem))}</b>{rem > 0.5 ? ` · ${L("this will be recorded as an unexplained difference", "itaandikwa kama tofauti isiyoelezeka")}` : ""}</p>
+                      <p className="small">{L("Still unexplained", "Bado haielezeki")}: <b className={rem > 0.5 ? "amber" : "green"}>{money(Math.max(0, rem))}</b>{rem > 0.5 ? ` · ${L("this will be held as an unexplained difference for TijaPass to resolve with you", "itawekwa kando kama tofauti isiyoelezeka ili TijaPass waitatue nawe")}` : ""}</p>
                       {rem < -0.5 && <p className="small red">{L("Your reasons add up to more than the difference.", "Sababu zako zinazidi tofauti.")}</p>}
                     </div>
                   )}

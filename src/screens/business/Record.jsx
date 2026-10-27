@@ -1,8 +1,8 @@
 // The one Record screen (REC-01 to REC-11, IMP-01 to IMP-05).
 import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, CheckCircle2, FileUp, Loader2, Moon, RotateCcw, Sparkles } from "lucide-react";
 import { useState } from "react";
-import { KINDS, READY_KINDS, flowOf } from "../../core/kinds.js";
-import { blockedForToday, isClosed, unclosedPastDays } from "../../core/dailyClose.js";
+import { GROUP_KINDS, KINDS, READY_KINDS, flowOf } from "../../core/kinds.js";
+import { isClosed, unclosedPastDays } from "../../core/dailyClose.js";
 import { checkStatement, detectColumns, matchExisting, needsExplanation, pdfTextToLines, rowsToLines } from "../../core/statements.js";
 import { readDescription } from "../../core/reader.js";
 import { readStatementFile } from "../../core/xlsxReader.js";
@@ -29,6 +29,18 @@ export function readyFor(dir) {
   });
 }
 
+const GROUP_OUT = [
+  { key: "save", kind: "group_contribution", mode: "savings", en: "My contribution, saved until my turn or the share-out", sw: "Mchango wangu, akiba hadi zamu yangu au mgao" },
+  { key: "after", kind: "group_contribution", mode: "afterPayout", en: "My contribution after I already received my payout this round", sw: "Mchango wangu baada ya kupokea mgao wangu wa mzunguko huu" },
+  { key: "loan", kind: "group_loan_repayment", mode: null, en: "Repaying a loan I took from the group", sw: "Kurejesha mkopo nilioukopa kwenye kikundi" },
+  { key: "fee", kind: "other_expense", mode: null, en: "A fine or fee paid to the group", sw: "Faini au ada iliyolipwa kwa kikundi" }
+];
+const GROUP_IN = [
+  { key: "done", kind: "group_payout", mode: "complete", en: "My payout or share-out, and I have finished paying in", sw: "Mgao wangu, na nimemaliza kuchangia" },
+  { key: "early", kind: "group_payout", mode: "early", en: "My payout, but I still have contributions to pay", sw: "Mgao wangu, lakini bado nina michango ya kulipa" },
+  { key: "loan", kind: "group_loan_received", mode: null, en: "A loan from the group", sw: "Mkopo kutoka kikundi" }
+];
+
 export function EntryForm({ business, initial = {}, fixedDate, onPosted, onCancel, compact }) {
   const { state, user } = useStore();
   const act = useAction();
@@ -52,6 +64,16 @@ export function EntryForm({ business, initial = {}, fixedDate, onPosted, onCance
   const [hint, setHint] = useState("");
   const [result, setResult] = useState(null);
   const [fromReady, setFromReady] = useState(false);
+  const [groupMode, setGroupMode] = useState(null);
+  const [groupLabel, setGroupLabel] = useState("");
+  // Group savings need one clarifying question before posting (REC-09, revised 27 Oct).
+  const toConfirm = (k, ready = false) => {
+    setKind(k);
+    if (ready) setFromReady(true);
+    setGroupMode(null);
+    setGroupLabel("");
+    setStage(GROUP_KINDS.includes(k) ? "group" : "confirm");
+  };
 
   const closedDay = !fixedDate && isClosed(state, business.id, date) && date !== t;
   const read = async () => {
@@ -101,7 +123,7 @@ export function EntryForm({ business, initial = {}, fixedDate, onPosted, onCance
   const post = () => {
     const entry = {
       id: uid("E"), businessId: business.id, date, kind, amount: amt, channelId: needsChannel ? channelId : null, toChannelId: kind === "transfer" ? toChannelId : null,
-      description: description.trim(), payer: payer.trim(), reference: reference.trim(), photoId, source: fromReady ? "ready" : usedVoice ? "voice" : initial.source || "typed",
+      groupMode, description: description.trim(), payer: payer.trim(), reference: reference.trim(), photoId, source: fromReady ? "ready" : usedVoice ? "voice" : initial.source || "typed",
       ai: reading ? { engine: reading.engine, suggested: reading.kind, confidence: reading.confidence } : null, importId: initial.importId || null
     };
     const ev = act((d) => {
@@ -120,7 +142,7 @@ export function EntryForm({ business, initial = {}, fixedDate, onPosted, onCance
   };
 
   const reset = () => {
-    setDir(initial.dir || null); setAmount(""); setDescription(""); setPayer(""); setReference(""); setPhotoId(null); setReading(null); setKind(null); setFails(0); setStage("form"); setHint(""); setResult(null); setFromReady(false); setUsedVoice(false); setTouchedChannel(false);
+    setDir(initial.dir || null); setAmount(""); setDescription(""); setPayer(""); setReference(""); setPhotoId(null); setReading(null); setKind(null); setFails(0); setStage("form"); setHint(""); setResult(null); setFromReady(false); setUsedVoice(false); setTouchedChannel(false); setGroupMode(null); setGroupLabel("");
   };
 
   if (stage === "done") {
@@ -217,12 +239,23 @@ export function EntryForm({ business, initial = {}, fixedDate, onPosted, onCance
             </div>
           )}
           {amt <= 0 && <p className="notice warn">{L("Please type the amount above.", "Tafadhali andika kiasi.")}</p>}
-          <button className="btn primary big" disabled={amt <= 0} onClick={() => setStage("confirm")}>{L("Yes, correct", "Ndiyo, sahihi")}</button>
+          <button className="btn primary big" disabled={amt <= 0} onClick={() => toConfirm(kind)}>{L("Yes, correct", "Ndiyo, sahihi")}</button>
           {reading.alternatives?.length > 0 && <p className="small bold">{L("Or did you mean:", "Au ulimaanisha:")}</p>}
           {reading.alternatives?.slice(0, 3).map((k) => (
-            <button key={k} className="choice" disabled={amt <= 0} onClick={() => { setKind(k); setStage("confirm"); }}>{kindPlain(k)}</button>
+            <button key={k} className="choice" disabled={amt <= 0} onClick={() => toConfirm(k)}>{kindPlain(k)}</button>
           ))}
           <button className="btn" onClick={rewrite}><RotateCcw size={18} />{L("No, let me write it again", "Hapana, nitaandika tena")}</button>
+        </div>
+      )}
+
+      {stage === "group" && (
+        <div className="stack">
+          <h3>{L("One question about your group money", "Swali moja kuhusu pesa ya kikundi")}</h3>
+          <p className="small muted">{L("Mchezo, upatu and VICOBA work differently. Choose what this money was.", "Mchezo, upatu na VICOBA vinafanya kazi tofauti. Chagua pesa hii ilikuwa nini.")}</p>
+          {(flowOf(kind) === "in" ? GROUP_IN : GROUP_OUT).map((o) => (
+            <button key={o.key} className="choice" onClick={() => { setKind(o.kind); setGroupMode(o.mode); setGroupLabel(tl(o)); setStage("confirm"); }}>{tl(o)}</button>
+          ))}
+          <button className="btn" onClick={() => setStage("reading")}>{L("Back", "Rudi")}</button>
         </div>
       )}
 
@@ -231,7 +264,7 @@ export function EntryForm({ business, initial = {}, fixedDate, onPosted, onCance
           <h3>{L("Choose what happened", "Chagua kilichotokea")}</h3>
           <p className="small muted">{L("Tap the sentence that fits best.", "Gusa sentensi inayofaa zaidi.")}</p>
           {readyFor(dir || "in").map((k) => (
-            <button key={k} className="choice" disabled={amt <= 0} onClick={() => { setKind(k); setFromReady(true); setStage("confirm"); }}>{tl(KINDS[k])}</button>
+            <button key={k} className="choice" disabled={amt <= 0} onClick={() => toConfirm(k, true)}>{tl(KINDS[k])}</button>
           ))}
           {amt <= 0 && (
             <Field label={L("Amount (TZS)", "Kiasi (TZS)")}><AmountInput big value={amount} onChange={setAmount} /></Field>
@@ -249,7 +282,7 @@ export function EntryForm({ business, initial = {}, fixedDate, onPosted, onCance
             {needsChannel && <div className="row2"><span>{L("Where", "Wapi")}</span><b>{business.channels.find((c) => c.id === channelId)?.name}{kind === "transfer" ? ` → ${business.channels.find((c) => c.id === toChannelId)?.name}` : ""}</b></div>}
             <div className="row2"><span>{L("Date", "Tarehe")}</span><b>{fmtDate(date)}</b></div>
             {payer && <div className="row2"><span>{dir === "in" ? L("From", "Kutoka") : L("To", "Kwa")}</span><b>{payer}</b></div>}
-            <div className="row2"><span>{L("Meaning", "Maana")}</span><b>{kindPlain(kind)}</b></div>
+            <div className="row2"><span>{L("Meaning", "Maana")}</span><b>{groupLabel || kindPlain(kind)}</b></div>
           </div>
           {conflict && <p className="notice warn">{holdText("direction")} {L("If you save, TijaPass Admin will check it first.", "Ukihifadhi, TijaPass Admin wataukagua kwanza.")}</p>}
           {reading?.amount && amt && reading.amount !== amt && <p className="notice warn">{L("Your words said", "Maneno yako yalisema")} {money(reading.amount)}. {L("The amount typed above will be used.", "Kiasi kilichoandikwa juu ndicho kitatumika.")}</p>}
@@ -286,6 +319,20 @@ function sampleCsv(business, channelId, state) {
   }
   downloadText(`sample-statement-${(ch?.name || "wallet").replace(/\W+/g, "-").toLowerCase()}.csv`, rows.map((r) => r.join(",")).join("\n"));
 }
+// Evidence-quality grade for an uploaded statement (IMP-02, IMP-03 revised): A and B count as supported evidence.
+const GRADES = {
+  A: { en: "PDF; name, layout, dates and running balances all check out", sw: "PDF; jina, muundo, tarehe na salio vyote vinalingana" },
+  B: { en: "All checks that could be made passed (editable file, or no running balance shown)", sw: "Vipimo vyote vilivyowezekana vimepita (faili linaloharirika, au hakuna salio)" },
+  C: { en: "Some checks failed: lines are kept as the business's own declaration", sw: "Baadhi ya vipimo vimeshindwa: mistari inahesabiwa kama maelezo ya biashara" },
+  D: { en: "Statement in another name: nothing is saved", sw: "Taarifa ya jina jingine: hakuna kinachohifadhiwa" }
+};
+export function gradeStatement(c, isPdf) {
+  if (!c.nameMatch) return "D";
+  const ok = c.layout && c.datesInRange && c.runningBalance !== false;
+  if (ok && isPdf && c.runningBalance === true) return "A";
+  if (ok) return "B";
+  return "C";
+}
 const PROVIDERS = [/m-?pesa/i, /airtel money/i, /mixx|tigo ?pesa/i, /halopesa/i, /crdb/i, /nmb/i, /nbc/i, /azam ?pesa/i];
 
 function StatementUpload({ business }) {
@@ -321,9 +368,11 @@ function StatementUpload({ business }) {
         const dup = matchExisting(l, mine);
         const unclear = needsExplanation(l);
         const r = unclear ? null : readDescription(l.description, dirn);
-        return { ...l, lineId: `L${i}`, dir: dirn, amount: l.amountIn || l.amountOut, status: l.date < business.startDate ? "before" : dup ? "dup" : unclear || !r?.kind ? "explain" : "post", kind: r?.kind || null };
+        // A withdrawal or deposit may be a transfer, a payment or personal use: the business says which (feedback 27 Oct).
+        const transferLike = r?.kind === "transfer";
+        return { ...l, lineId: `L${i}`, dir: dirn, amount: l.amountIn || l.amountOut, status: l.date < business.startDate ? "before" : dup ? "dup" : unclear || !r?.kind || transferLike ? "explain" : "post", kind: r?.kind || null, suggestTransfer: transferLike };
       });
-      setRes({ lines: items, checks, accountName, engine });
+      setRes({ lines: items, checks, accountName, engine, grade: gradeStatement(checks, /\.pdf$/i.test(file.name)) });
       setNeedPw(false);
     } catch (e) {
       if (e.code === "needs-password" || e.code === "wrong-password") { setNeedPw(true); setErr(e.code === "wrong-password" ? L("Wrong password. Try again.", "Nenosiri si sahihi. Jaribu tena.") : L("This PDF has a password. Type it below.", "PDF hii ina nenosiri. Liandike hapa chini.")); }
@@ -339,15 +388,9 @@ function StatementUpload({ business }) {
     const toPost = res.lines.filter((l) => l.status === "post");
     const toExplain = res.lines.filter((l) => l.status === "explain");
     act((d) => {
-      const cash = business.channels.find((c) => c.type === "cash" && c.id !== channelId) || business.channels.find((c) => c.id !== channelId);
-      for (const l of toPost) {
-        // A withdrawal or deposit is a transfer between this account and cash in hand (REC-10).
-        const isTransfer = l.kind === "transfer" && cash;
-        const from = isTransfer && l.dir === "in" ? cash.id : channelId;
-        const to = isTransfer ? (l.dir === "in" ? channelId : cash.id) : null;
-        d.entries.push({ id: uid("E"), businessId: business.id, date: l.date, kind: l.kind === "transfer" && !cash ? (l.dir === "in" ? "other_income" : "other_expense") : l.kind, amount: l.amount, channelId: from, toChannelId: to, description: l.description, reference: l.reference, status: "posted", source: "import", importId, createdAt: nowISO(d), createdBy: { id: user.id, name: user.name, role: user.role } });
-      }
-      d.imports.unshift({ id: importId, businessId: business.id, channelId, fileName: file.name, at: nowISO(d), checks: res.checks, accountName: res.accountName, posted: toPost.length, duplicates: res.lines.filter((l) => l.status === "dup").length, pending: toExplain.map((l) => ({ lineId: l.lineId, date: l.date, description: l.description, amount: l.amount, dir: l.dir, channelId })) });
+      const evidence = ["A", "B"].includes(res.grade) ? "supported" : "declared";
+      for (const l of toPost) d.entries.push({ id: uid("E"), businessId: business.id, date: l.date, kind: l.kind, amount: l.amount, channelId, description: l.description, reference: l.reference, status: "posted", source: "import", importId, importGrade: res.grade, evidence, createdAt: nowISO(d), createdBy: { id: user.id, name: user.name, role: user.role } });
+      d.imports.unshift({ id: importId, businessId: business.id, channelId, fileName: file.name, at: nowISO(d), grade: res.grade, checks: res.checks, accountName: res.accountName, posted: toPost.length, duplicates: res.lines.filter((l) => l.status === "dup").length, pending: toExplain.map((l) => ({ lineId: l.lineId, date: l.date, description: l.description, amount: l.amount, dir: l.dir, channelId, suggestTransfer: l.suggestTransfer, grade: res.grade })) });
       audit(d, user, "Statement uploaded", business.id, { after: { file: file.name, posted: toPost.length } });
       if (!res.checks.runningBalance && res.checks.runningBalance !== null) notify(d, { role: "dataAdmin" }, { en: "Statement balances do not add up", sw: "Salio la taarifa halilingani" }, { en: `${business.profile.businessName}: ${file.name}`, sw: `${business.profile.businessName}: ${file.name}` }, "ledger");
     }, L("Statement lines saved", "Mistari ya taarifa imehifadhiwa"));
@@ -375,7 +418,8 @@ function StatementUpload({ business }) {
             <div>{c.runningBalance === null ? "–" : c.runningBalance ? "✓" : "✗"} {L("Running balances add up", "Salio linaendana")}{c.runningBalance === null ? ` (${L("not shown on statement", "halionyeshwi")})` : ""}</div>
             <div>{c.datesInRange ? "✓" : "✗"} {L("Dates are in the expected range", "Tarehe ziko kwenye kipindi kinachotarajiwa")}</div>
             <div>✓ {c.duplicates} {L("lines already recorded by hand will not be added again", "mistari iliyoandikwa tayari haitaongezwa tena")}</div>
-            <p className="tiny mt">{L("These checks help, but they do not prove a document is genuine.", "Vipimo hivi vinasaidia, lakini havithibitishi kuwa hati ni halisi.")}</p>
+            <p className="mt"><b>{L("Evidence grade", "Daraja la ushahidi")}: {res.grade}</b> · {tl(GRADES[res.grade])}</p>
+            <p className="tiny mt">{L("These checks help, but they do not prove a document is genuine. Only direct links to the bank or mobile money provider can do that (live pilot).", "Vipimo hivi vinasaidia, lakini havithibitishi kuwa hati ni halisi. Ni muunganisho wa moja kwa moja na benki au mtoa huduma pekee unaoweza (majaribio halisi).")}</p>
           </div>
           {nameBad && <p className="notice bad"><b>{L("Statement in another name", "Taarifa ya jina jingine")}</b>{L("This statement does not seem to belong to this business or its owner, so no line will be saved. Upload a statement in your own name.", "Taarifa hii haionekani kuwa ya biashara hii au mmiliki wake, hivyo hakuna mstari utakaohifadhiwa. Pakia taarifa ya jina lako.")}</p>}
           <div className="table-wrap">
@@ -387,7 +431,7 @@ function StatementUpload({ business }) {
                     <td className="nowrap">{fmtDate(l.date)}</td>
                     <td>{l.description || <span className="muted">—</span>}</td>
                     <td className={`num ${l.dir === "in" ? "green" : "amber"}`}>{l.dir === "out" ? "−" : ""}{money(l.amount)}</td>
-                    <td>{l.status === "before" ? <Pill tone="grey">{L("Before you joined: not added", "Kabla hujajiunga: haiongezwi")}</Pill> : l.status === "dup" ? <Pill tone="grey">{L("Already recorded", "Imeshaandikwa")}</Pill> : l.status === "explain" ? <Pill tone="orange">{L("You will explain it", "Utaueleza")}</Pill> : <span className="small">{kindPlain(l.kind)}</span>}</td>
+                    <td>{l.status === "before" ? <Pill tone="grey">{L("Before you joined: not added", "Kabla hujajiunga: haiongezwi")}</Pill> : l.status === "dup" ? <Pill tone="grey">{L("Already recorded", "Imeshaandikwa")}</Pill> : l.status === "explain" ? <Pill tone="orange">{l.suggestTransfer ? L("Withdrawal or deposit: you will say what it was", "Kutoa au kuweka: utasema ilikuwa nini") : L("You will explain it", "Utaueleza")}</Pill> : <span className="small">{kindPlain(l.kind)}</span>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -406,17 +450,6 @@ export default function Record() {
   const [mode, setMode] = useState(params.mode === "upload" ? "upload" : "entry");
   const t = today(state);
   const missed = unclosedPastDays(state, b, t);
-  if (blockedForToday(state, b, t)) {
-    return (
-      <div className="stack">
-        <Card>
-          <h2>{L("First close your earlier days", "Kwanza funga siku zilizopita")}</h2>
-          <p className="mt">{missed.length === 1 ? L(`${fmtDate(missed[0])} is not closed yet. Close it, then record today's money.`, `${fmtDate(missed[0])} bado haijafungwa. Ifunge, kisha andika pesa za leo.`) : L(`${missed.length} days are not closed. Go through each day, then count your money once.`, `Siku ${missed.length} hazijafungwa. Pitia kila siku, kisha hesabu pesa zako mara moja.`)}</p>
-          <button className="btn primary big mt" onClick={() => go("close")}><Moon size={20} />{L("Close earlier days", "Funga siku zilizopita")}</button>
-        </Card>
-      </div>
-    );
-  }
   return (
     <div className="stack">
       <div className="between">
@@ -426,6 +459,13 @@ export default function Record() {
         </div>
         <button className="btn navy" onClick={() => go("close")}><Moon size={18} />{L("Close my day", "Funga siku yangu")}</button>
       </div>
+      {missed.length > 0 && (
+        <div className="notice warn">
+          <b>{missed.length === 1 ? L(`${fmtDate(missed[0])} is not closed`, `${fmtDate(missed[0])} haijafungwa`) : L(`${missed.length} days are not closed`, `Siku ${missed.length} hazijafungwa`)}</b>
+          {L("You can keep recording. Please catch up soon: loans are only possible when every day is closed.", "Unaweza kuendelea kuandika. Tafadhali fidia mapema: mikopo inawezekana tu siku zote zikiwa zimefungwa.")}
+          <div className="mt"><button className="btn small" onClick={() => go("close")}><Moon size={16} />{L("Catch up now", "Fidia sasa")}</button></div>
+        </div>
+      )}
       {mode === "entry" ? <EntryForm key={params.dir || "x"} business={b} initial={{ dir: params.dir }} /> : <StatementUpload business={b} />}
     </div>
   );

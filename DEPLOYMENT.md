@@ -6,7 +6,7 @@ V9 stays untouched: V10 gets its own repository, its own Netlify site and its ow
 
 **Option A: in the browser (no tools needed)**
 
-The package has fewer than 100 files, so it goes up in one drag-and-drop (GitHub's website takes at most 100 files at a time).
+The package has 80 files, fewer than 100, so it goes up in one drag-and-drop (GitHub's website takes at most 100 files at a time).
 
 1. On GitHub, click **New repository**. Name: `Tijapass-V10`. Private is fine. Do **not** add a README, .gitignore or licence.
 2. Unzip `tijapass-v10.zip` on your computer and open the `tijapass-v10` folder.
@@ -50,7 +50,7 @@ Without a key the app works fully with its built-in rules and labels readings "b
 ## 4. After deploying
 
 - Open the site, use **Test accounts**, and follow [TESTING.md](TESTING.md).
-- Each tester's data lives in their own browser. To share a scenario, testers follow the same steps, or use **Settings → Test tools** to generate sample activity.
+- Each tester's data lives in their own browser. To share a scenario, sign in as **Super user → Test data** and load the same sample data, or use **Settings → Test tools** to generate sample activity.
 - Pushing to `main` redeploys automatically.
 
 ## Troubleshooting

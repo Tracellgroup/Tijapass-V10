@@ -30,7 +30,7 @@ function useTimedAlerts() {
     if (b) {
       if (closingDue(state, b, t, hm)) want.push({ key: `close-${b.id}-${t}`, businessId: b.id, title: { en: "Close your day?", sw: "Funga siku yako?" }, body: { en: "Count your money and close today.", sw: "Hesabu pesa zako na ufunge siku ya leo." }, link: "close" });
       const y = addDays(t, -1);
-      if (hm >= "09:00" && b.startDate <= y && !isClosed(state, b.id, y)) want.push({ key: `remind-${b.id}-${t}`, businessId: b.id, title: { en: "Yesterday is not closed", sw: "Jana haijafungwa" }, body: { en: "Close yesterday before recording today's money.", sw: "Funga jana kabla ya kuandika pesa za leo." }, link: "close" });
+      if (hm >= "09:00" && b.startDate <= y && !isClosed(state, b.id, y)) want.push({ key: `remind-${b.id}-${t}`, businessId: b.id, title: { en: "Yesterday is not closed", sw: "Jana haijafungwa" }, body: { en: "Please close yesterday. Loans need every day closed.", sw: "Tafadhali funga jana. Mikopo inahitaji siku zote zimefungwa." }, link: "close" });
       for (const l of state.loans.filter((x) => x.businessId === b.id && x.status === "disbursed")) {
         for (const i of l.schedule || []) {
           if (i.paidAt) continue;

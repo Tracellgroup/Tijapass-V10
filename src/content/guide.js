@@ -55,6 +55,7 @@ export const GUIDE = {
     "report-design": g("Choose which KPI tiles report users see and the minimum group size.", "Chagua vigae vya viashiria ambavyo watumiaji wa ripoti wanaona na ukubwa wa chini wa kundi."),
     audit: g("Every change: who, when, value before and after, and the reason.", "Kila badiliko: nani, lini, thamani kabla na baada, na sababu."),
     kpi: g("The KPI dashboard as report users see it.", "Dashibodi ya viashiria kama watumiaji wa ripoti wanavyoiona."),
+    "test-data": g("Super user only: load 10 fictional businesses with transactions and ratings for testing, and remove them in one step.", "Mtumiaji mkuu pekee: pakia biashara 10 za kubuni zenye miamala na viwango kwa majaribio, na uziondoe kwa hatua moja."),
     help: g("Guide, common questions and chat.", "Mwongozo, maswali ya kawaida na mazungumzo.")
   },
   reports: {

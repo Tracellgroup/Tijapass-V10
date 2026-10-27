@@ -93,7 +93,7 @@ export default function SignIn() {
               <Card>
                 <div className="form">
                   <Field label={L("Phone number", "Namba ya simu")}><Text value={phone} onChange={setPhone} inputMode="tel" placeholder="0712 345 678" /></Field>
-                  <Field label="PIN"><input className="input" type="password" inputMode="numeric" maxLength={4} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} onKeyDown={(e) => e.key === "Enter" && bizSignIn()} /></Field>
+                  <Field label="PIN"><input className="input" type="password" inputMode="numeric" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} onKeyDown={(e) => e.key === "Enter" && bizSignIn()} /></Field>
                   <button className="btn primary big" onClick={bizSignIn}><LogIn size={20} />{L("Sign in", "Ingia")}</button>
                 </div>
                 <div className="notice mt">

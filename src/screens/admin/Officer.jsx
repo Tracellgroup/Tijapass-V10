@@ -5,7 +5,7 @@ import { closesFor, isClosed, unclosedPastDays } from "../../core/dailyClose.js"
 import { dueList, nextDue } from "../../core/rating.js";
 import { SECTORS } from "../../core/seed.js";
 import { addDays, money, today, uid } from "../../core/util.js";
-import { assignOfficer, requestChange } from "../../lib/actions.js";
+import { assignOfficer, correctBaseline, requestChange } from "../../lib/actions.js";
 import { atLeast, businessesInScope, canSeeBusiness } from "../../lib/access.js";
 import { L, tl } from "../../lib/i18n.js";
 import { useAction, useStore } from "../../lib/store.jsx";
@@ -110,7 +110,7 @@ export function BusinessFile({ businessId, initial = "activity" }) {
       {tab === "activity" && <><DateRange value={range} onChange={setRange} /><ActivityList business={b} from={range.from} to={range.to} /></>}
       {tab === "statements" && <Statements business={b} />}
       {tab === "rating" && <RatingHistory business={b} mode="admin" />}
-      {tab === "profile" && <><ProfileDetails business={b} /><Card title={L("Inclusion baseline (asked once)", "Maswali ya msingi (yaliulizwa mara moja)")}><pre className="small" style={{ whiteSpace: "pre-wrap", margin: 0 }}>{Object.entries(b.baseline || {}).filter(([k]) => k !== "at").map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`).join("\n")}</pre></Card></>}
+      {tab === "profile" && <><ProfileDetails business={b} /><BaselineCard business={b} /></>}
       {tab === "opening" && (
         <Card title={L("Starting position", "Hali ya kuanzia")} actions={b.opening ? <StatusPill status={b.opening.status} /> : null}>
           {b.opening?.status === "approved" ? (atLeast(user, "dataAdmin") ? <OpeningForm business={b} mode="admin" /> : <p>{L("Approved and locked. Only Data Admin can change it.", "Imeidhinishwa na imefungwa. Msimamizi wa Data pekee anaweza kuibadilisha.")}</p>)
@@ -119,6 +119,49 @@ export function BusinessFile({ businessId, initial = "activity" }) {
       )}
       {tab === "loans" && (loans.length ? loans.map((l) => <Card key={l.id} title={`${l.id} · ${money(l.offer?.principal || l.amount)}`} actions={<StatusPill status={l.status} />}>{l.schedule ? <LoanTracker loan={l} business={b} /> : <p className="small muted">{l.purpose}</p>}</Card>) : <Empty text={L("No loans.", "Hakuna mikopo.")} />)}
     </div>
+  );
+}
+
+const BASELINE_FIELDS = {
+  bank: [["used", "Bank account used in last 3 months"], ["notUsed", "Bank account, not used"], ["none", "No bank account"]],
+  mobile: [["personal", "Personal mobile money"], ["business", "Business till / Lipa number"], ["none", "No mobile money"]],
+  borrowed: [["now", "Borrowing formally now"], ["past", "Borrowed formally in the past"], ["never", "Never borrowed formally"]],
+  needFinance: [["yes", "Needs finance in 6 months"], ["no", "No finance need"]]
+};
+
+// Baseline answers: asked once; Data Admin may correct one with a reason, and the first answers stay on record (ONB-06 revised).
+function BaselineCard({ business }) {
+  const { user } = useStore();
+  const act = useAction();
+  const [field, setField] = useState("");
+  const [value, setValue] = useState("");
+  const base = business.baseline || {};
+  const orig = base.original || base;
+  const label = (f, v) => (BASELINE_FIELDS[f]?.find(([k]) => k === v)?.[1]) || (Array.isArray(v) ? v.join(", ") : String(v ?? "—"));
+  return (
+    <Card title={L("Inclusion baseline (asked once)", "Maswali ya msingi (yaliulizwa mara moja)")}>
+      <div className="table-wrap"><table className="t"><thead><tr><th>{L("Question", "Swali")}</th><th>{L("First answer", "Jibu la kwanza")}</th><th>{L("Now", "Sasa")}</th></tr></thead><tbody>
+        {["bank", "mobile", "borrowed", "sources", "needFinance", "needAmount"].map((f) => <tr key={f}><td>{f}</td><td>{label(f, orig[f])}</td><td>{label(f, base[f])}{JSON.stringify(orig[f]) !== JSON.stringify(base[f]) ? " *" : ""}</td></tr>)}
+      </tbody></table></div>
+      {(base.corrections || []).map((c, i) => <p key={i} className="tiny muted mt">* {c.field}: {label(c.field, c.before)} → {label(c.field, c.after)} · {c.by?.name} · {fmtDate(c.at)} · {c.reason}</p>)}
+      {atLeast(user, "dataAdmin") && (
+        <div className="form two mt">
+          <Field label={L("Correct an answer", "Sahihisha jibu")}><Select value={field} onChange={(v) => { setField(v); setValue(""); }} placeholder={L("Choose", "Chagua")} options={Object.keys(BASELINE_FIELDS).map((f) => ({ value: f, label: f }))} /></Field>
+          {field && <Field label={L("Correct answer", "Jibu sahihi")}><Select value={value} onChange={setValue} placeholder={L("Choose", "Chagua")} options={BASELINE_FIELDS[field].map(([k, t]) => ({ value: k, label: t }))} /></Field>}
+          {field && value && <CorrectBaseline business={business} field={field} value={value} onDone={() => { setField(""); setValue(""); }} act={act} user={user} />}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function CorrectBaseline({ business, field, value, onDone, act, user }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="btn" onClick={() => setOpen(true)}>{L("Save correction", "Hifadhi marekebisho")}</button>
+      {open && <ReasonModal title={L("Correct baseline answer", "Sahihisha jibu la msingi")} intro={L("The first answer stays on record.", "Jibu la kwanza linabaki kwenye kumbukumbu.")} onClose={() => setOpen(false)} onSubmit={(reason) => { const ok = act((d) => correctBaseline(d, user, business.id, field, value, reason), L("Corrected", "Imesahihishwa")); if (ok) onDone(); return ok; }} />}
+    </>
   );
 }
 
@@ -152,7 +195,7 @@ export function OffClose() {
         <div className="list">
           {flags.map((c) => {
             const b = list.find((x) => x.id === c.businessId);
-            return <div key={c.id} className="item"><AlertTriangle size={18} className="amber" /><div className="grow"><b>{b.profile.businessName}</b><div className="small muted">{fmtDate(c.date)} · {L("unexplained", "haielezeki")} {money(c.remainder)}</div></div><button className="btn small" onClick={() => go("business", { id: b.id })}>{L("Open", "Fungua")}</button></div>;
+            return <div key={c.id} className="item"><AlertTriangle size={18} className="amber" /><div className="grow"><b>{b.profile.businessName}</b><div className="small muted">{fmtDate(c.date)} · {L("unexplained", "haielezeki")} {money(c.remainder)} · {Math.abs(c.open || 0) > 0.004 ? `${L("still to resolve", "bado kutatuliwa")} ${money(c.open)}` : L("resolved", "imetatuliwa")}</div></div><button className="btn small" onClick={() => go("business", { id: b.id })}>{L("Open", "Fungua")}</button></div>;
           })}
         </div>
       </Card>

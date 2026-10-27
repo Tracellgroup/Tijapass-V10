@@ -29,7 +29,8 @@ Generated from `src/core/kinds.js` by `npm run accounting-map`. The AI only sugg
 | `otherExpenses` | expense | Other business costs | Gharama nyingine za biashara |
 | `loss` | expense | Losses | Hasara |
 | `interest` | expense | Loan interest and fees | Riba na ada za mkopo |
-| `cashDifference` | expense | Unexplained cash difference | Tofauti ya pesa isiyoelezeka |
+| `cashDifference` | expense | Cash differences written off | Tofauti za pesa zilizofutwa |
+| `suspense` | asset | Cash differences to resolve | Tofauti za pesa zinazosubiri ufumbuzi |
 | (calculated) | equity | Retained earnings = cumulative profit from posted entries; never typed (ACC-03) | Faida iliyobaki |
 
 ## Ready phrases and their accounting (REC-05, REC-09, REC-10)
@@ -65,8 +66,11 @@ Generated from `src/core/kinds.js` by `npm run accounting-map`. The AI only sugg
 |---|---|---|---|
 | `loss` | Money lost or stolen | Losses (`loss`) | the entry's money channel (cash / wallet / bank) |
 | `sale_credit_fix` | A sale I recorded as paid was on credit | Money customers owe (`receivables`) | the entry's money channel (cash / wallet / bank) |
-| `cash_over` | Unexplained extra money | the entry's money channel (cash / wallet / bank) | Unexplained cash difference (`cashDifference`) |
-| `cash_short` | Unexplained missing money | Unexplained cash difference (`cashDifference`) | the entry's money channel (cash / wallet / bank) |
+| `cash_over` | Unexplained extra money (to resolve) | the entry's money channel (cash / wallet / bank) | Cash differences to resolve (`suspense`) |
+| `cash_short` | Unexplained missing money (to resolve) | Cash differences to resolve (`suspense`) | the entry's money channel (cash / wallet / bank) |
+| `cash_over_small` | Small extra money within tolerance | the entry's money channel (cash / wallet / bank) | Cash differences written off (`cashDifference`) |
+| `cash_short_small` | Small shortfall within tolerance | Cash differences written off (`cashDifference`) | the entry's money channel (cash / wallet / bank) |
+| `suspense_resolve` | Cash difference resolved | Cash differences to resolve (`suspense`) | Cash differences to resolve (`suspense`) |
 | `asset_financed` | Asset received through a loan | Equipment and other business assets (`equipment`) | Loans due within 12 months (`loansShort`) |
 | `loan_interest` | Loan interest and fees | Loan interest and fees (`interest`) | the entry's money channel (cash / wallet / bank) |
 | `stock_adjust` | Stock count adjustment | Stock (`inventory`) | Stock change (`stockChange`) |

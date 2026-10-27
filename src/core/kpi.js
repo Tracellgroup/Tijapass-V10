@@ -28,8 +28,16 @@ export function computeKpis(state, filters, todayISO) {
   const from = filters.from || addDays(todayISO, -90);
   const to = filters.to || todayISO;
   const pop = filterBusinesses(state, filters, todayISO);
-  const minGroup = state.settings.minGroupSize ?? 5;
-  if (pop.length < minGroup) return { hidden: true, count: pop.length, minGroup, from, to };
+  const minGroup = state.settings.minGroupSize ?? 10;
+  const minCell = state.settings.minCellSize ?? 3;
+  if (pop.length < minGroup) return { hidden: true, reason: "small", count: pop.length, minGroup, from, to };
+  // Complementary suppression: a filtered group whose complement is small could be found by subtraction.
+  const filtered = Boolean(filters.region || filters.sector || filters.gender || filters.age);
+  if (filtered) {
+    const all = filterBusinesses(state, { to: filters.to }, todayISO).length;
+    const rest = all - pop.length;
+    if (rest > 0 && rest < minGroup) return { hidden: true, reason: "complement", count: pop.length, minGroup, from, to };
+  }
   const ids = new Set(pop.map((b) => b.id));
   const entries = (state.entries || []).filter((e) => ids.has(e.businessId) && e.status === "posted" && !e.contra);
   const loans = (state.loans || []).filter((l) => ids.has(l.businessId));
@@ -98,15 +106,15 @@ export function computeKpis(state, filters, todayISO) {
     bands[r ? bandFor(r.score).key : "not_checked"]++;
   }
   return {
-    hidden: false, count: pop.length, from, to, minGroup,
+    hidden: false, count: pop.length, from, to, minGroup, minCell, filtered,
     k1: { registered: pop.length, active: active.length },
-    k2: { noBank: share(noBank, withBaseline.length), neverBorrowed: share(neverBorrowed, withBaseline.length), answered: withBaseline.length },
+    k2: { noBank: share(noBank, withBaseline.length), neverBorrowed: share(neverBorrowed, withBaseline.length), answered: withBaseline.length, noBankN: noBank, neverBorrowedN: neverBorrowed },
     k3: { ready: share(ready, pop.length), readyCount: ready },
     k4: { requested: reqValue, approved: apprValue, gap: reqValue - apprValue, statedNeed },
     k5: { approvedCount: approved.length, approvedValue: apprValue, disbursedCount: disbursed.length, disbursedValue: sum(disbursed, (l) => l.offer?.principal || l.amount), outsideCount: outside.length, outsideValue: sum(outside, (q) => Number(q.outsideAmount) || 0) },
     k6: { par30: share(par30, totalOut), repaymentRate: share(paidOnTime, dueInst.length), outstanding: totalOut },
     k7: { recording: share(recording, pop.length), importing: share(importing, pop.length), mobileMoney: share(mobileUse, withBaseline.length) },
-    k8: { womenShare: share(women.length, pop.length), youthShare: share(youth.length, pop.length), womenFunded: share(women.filter((b) => fundedIds.has(b.id)).length, women.length), youthFunded: share(youth.filter((b) => fundedIds.has(b.id)).length, youth.length) },
+    k8: { womenShare: share(women.length, pop.length), youthShare: share(youth.length, pop.length), womenFunded: share(women.filter((b) => fundedIds.has(b.id)).length, women.length), youthFunded: share(youth.filter((b) => fundedIds.has(b.id)).length, youth.length), womenN: women.length, youthN: youth.length, womenFundedN: women.filter((b) => fundedIds.has(b.id)).length, youthFundedN: youth.filter((b) => fundedIds.has(b.id)).length },
     k9: { count: assetLoans.length, value: sum(assetLoans, (l) => l.offer?.principal || l.amount) },
     k10: { revenueFirst: g1.revenue, revenueLast: g2.revenue, profitFirst: g1.profit, profitLast: g2.profit, staff },
     extra: { avgCostPct: avgCost, complaints: complaints.length, complaintsResolved: complaints.filter((q) => q.status === "answered").length, bands }
@@ -122,22 +130,27 @@ export function annualCostPct(loan) {
   return round(((o.costOfCredit / o.principal) / Math.max(years, 1 / 12)) * 100, 1);
 }
 
+// CSV export follows the same suppression as the screen and says so in its header (BOT-01, BOT-07).
 export function kpiCsv(k, lang = "en") {
+  const c = (n) => (n > 0 && n < (k.minCell || 3) ? `fewer than ${k.minCell || 3}` : n);
+  const p = (x, n) => (n != null && n > 0 && n < (k.minCell || 3) ? "suppressed" : round(x * 100, 1) + "%");
   const rows = [
+    ["TijaPass KPI export", "Aggregated and de-identified", `Groups under ${k.minGroup} businesses and cells under ${k.minCell} are suppressed`],
+    ["Period", k.from, k.to], ["Businesses in group", k.count, ""],
     ["KPI", "Measure", "Value"],
-    ["1", "Registered", k.k1.registered], ["1", "Active", k.k1.active],
-    ["2", "No bank account at joining (share)", round(k.k2.noBank * 100, 1) + "%"], ["2", "Never borrowed formally (share)", round(k.k2.neverBorrowed * 100, 1) + "%"],
-    ["3", "Credit-ready (share)", round(k.k3.ready * 100, 1) + "%"],
+    ["1", "Registered", k.k1.registered], ["1", "Active", c(k.k1.active)],
+    ["2", "No bank account at joining (share of TijaPass businesses)", p(k.k2.noBank, k.k2.noBankN)], ["2", "Never borrowed formally (share of TijaPass businesses)", p(k.k2.neverBorrowed, k.k2.neverBorrowedN)],
+    ["3", "Credit-ready (share)", p(k.k3.ready, k.k3.readyCount)],
     ["4", "Requested (TZS)", k.k4.requested], ["4", "Approved (TZS)", k.k4.approved], ["4", "Gap (TZS)", k.k4.gap], ["4", "Stated need (TZS)", k.k4.statedNeed],
-    ["5", "Loans approved", k.k5.approvedCount], ["5", "Loans disbursed", k.k5.disbursedCount], ["5", "Value disbursed (TZS)", k.k5.disbursedValue], ["5", "Loans outside TijaPass", k.k5.outsideCount],
+    ["5", "Loans approved", c(k.k5.approvedCount)], ["5", "Loans disbursed", c(k.k5.disbursedCount)], ["5", "Value disbursed (TZS)", k.k5.disbursedCount > 0 && k.k5.disbursedCount < (k.minCell || 3) ? "suppressed" : k.k5.disbursedValue], ["5", "Loans outside TijaPass", c(k.k5.outsideCount)],
     ["6", "PAR30", round(k.k6.par30 * 100, 1) + "%"], ["6", "On-time repayment rate", round(k.k6.repaymentRate * 100, 1) + "%"],
     ["7", "Recording (share)", round(k.k7.recording * 100, 1) + "%"], ["7", "Importing statements (share)", round(k.k7.importing * 100, 1) + "%"], ["7", "Use mobile money (share)", round(k.k7.mobileMoney * 100, 1) + "%"],
-    ["8", "Women (share)", round(k.k8.womenShare * 100, 1) + "%"], ["8", "Youth (share)", round(k.k8.youthShare * 100, 1) + "%"],
-    ["9", "Asset loans", k.k9.count], ["9", "Asset loan value (TZS)", k.k9.value],
+    ["8", "Women (share)", round(k.k8.womenShare * 100, 1) + "%"], ["8", "Youth (share)", round(k.k8.youthShare * 100, 1) + "%"], ["8", "Women funded (share)", p(k.k8.womenFunded, k.k8.womenFundedN)], ["8", "Youth funded (share)", p(k.k8.youthFunded, k.k8.youthFundedN)],
+    ["9", "Asset loans", c(k.k9.count)], ["9", "Asset loan value (TZS)", k.k9.count > 0 && k.k9.count < (k.minCell || 3) ? "suppressed" : k.k9.value],
     ["10", "Revenue first month (TZS)", k.k10.revenueFirst], ["10", "Revenue last month (TZS)", k.k10.revenueLast], ["10", "Staff", k.k10.staff],
-    ["Extra", "Average annual cost of credit", k.extra.avgCostPct + "%"], ["Extra", "Complaints received", k.extra.complaints], ["Extra", "Complaints resolved", k.extra.complaintsResolved],
-    ...Object.entries(k.extra.bands).map(([b, n]) => ["Extra", `Records Rating: ${b}`, n])
+    ["Extra", "Average annual cost of credit", k.extra.avgCostPct + "%"], ["Extra", "Complaints received", c(k.extra.complaints)], ["Extra", "Complaints resolved", c(k.extra.complaintsResolved)],
+    ...Object.entries(k.extra.bands).map(([b, n]) => ["Extra", `Records Rating: ${b}`, c(n)])
   ];
   void lang;
-  return rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+  return rows.map((r) => r.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(",")).join("\n");
 }

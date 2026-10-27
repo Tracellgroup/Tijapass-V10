@@ -3,7 +3,7 @@ import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, CheckCircle2, Printer, Sen
 import { useMemo, useState } from "react";
 import { CASHFLOW_LINES, balanceSheet, cashFlowDirect, incomeStatement } from "../core/accounting.js";
 import { activePackage } from "../core/billing.js";
-import { FREQUENCIES, GATES, LOAN_TYPES, affordability, gates, kycCompleteness, maxInstalments, maxPrincipal, overdueAmount } from "../core/credit.js";
+import { FREQUENCIES, GATES, LOAN_TYPES, affordability, gates, kycCompleteness, maxInstalments, maxPrincipal, overdueAmount, reconciliation } from "../core/credit.js";
 import { closedDates } from "../core/dailyClose.js";
 import { ACCOUNTS, KINDS, flowOf } from "../core/kinds.js";
 import { CHECKS, bandFor, ratingsFor, tips } from "../core/rating.js";
@@ -175,6 +175,12 @@ export function proposedLimits(state, business, products) {
   });
 }
 
+const FACTOR_NAMES = {
+  kyc: { en: "Profile and ID", sw: "Wasifu na kitambulisho" }, coverage: { en: "Reliable records (evidence-weighted)", sw: "Kumbukumbu za kuaminika (kwa uzito wa ushahidi)" },
+  records: { en: "Number of records", sw: "Idadi ya kumbukumbu" }, months: { en: "Months of records", sw: "Miezi ya kumbukumbu" },
+  rating: { en: "Records Rating", sw: "Kiwango cha Kumbukumbu" }, repayment: { en: "Repayment record", sw: "Rekodi ya marejesho" }
+};
+
 export function Passport({ business, products, viewer = "business" }) {
   const { state } = useStore();
   const t = today(state);
@@ -185,6 +191,7 @@ export function Passport({ business, products, viewer = "business" }) {
   const limits = proposedLimits(state, business, products);
   const rep = g.score.repayment;
   const s = g.score.value;
+  const rc = useMemo(() => reconciliation(state, business, t), [state, business, t]);
   return (
     <div className="stack">
       <div className="grid g3">
@@ -210,16 +217,29 @@ export function Passport({ business, products, viewer = "business" }) {
         <div className="list">
           {Object.keys(GATES).map((k) => (
             <div className="item" key={k}>
-              {g.results[k] ? <CheckCircle2 size={20} className="green" /> : <XCircle size={20} className="red" />}
-              <div className="grow">{tl(GATES[k])}</div>
+              {g.results[k] === true ? <CheckCircle2 size={20} className="green" /> : g.results[k] === "review" ? <CheckCircle2 size={20} className="amber" /> : <XCircle size={20} className="red" />}
+              <div className="grow">
+                {tl(GATES[k])}
+                {g.results[k] === "review" && <div className="small amber">{L("Okay rating: a lender may offer only after its own review of the records.", "Kiwango cha Wastani: mkopeshaji anaweza kutoa ofa baada ya kukagua kumbukumbu mwenyewe.")}</div>}
+                {k === "reconciled" && g.results[k] !== true && <div className="small muted">{[rc.unclosed && `${rc.unclosed} ${L("days not closed", "siku hazijafungwa")}`, Math.abs(rc.suspense) > 0.5 && `${money(Math.abs(rc.suspense))} ${L("cash difference to resolve", "tofauti ya pesa ya kutatua")}`, rc.corrections && `${rc.corrections} ${L("corrections open", "marekebisho yanasubiri")}`, !rc.opening && L("starting position not approved", "hali ya kuanzia haijaidhinishwa")].filter(Boolean).join(" · ")}</div>}
+              </div>
             </div>
           ))}
+        </div>
+      </Card>
+      <Card title={L("How reliable the records are", "Uaminifu wa kumbukumbu")}>
+        <div className="kv">
+          <span>{L("Entries with supporting evidence (receipt, statement, checked by officer, approved)", "Miamala yenye ushahidi (risiti, taarifa, imekaguliwa na afisa, imeidhinishwa)")}</span><span>{g.score.evidence.supported}</span>
+          <span>{L("Entries declared by the business only (count half for credit)", "Miamala iliyotajwa na biashara pekee (inahesabiwa nusu kwa mkopo)")}</span><span>{g.score.evidence.declared}</span>
+          <span>{L("Open corrections from records checks", "Marekebisho yanayosubiri kutoka ukaguzi")}</span><span>{rc.corrections}</span>
         </div>
       </Card>
       <Card title={L("Proposed limits", "Viwango vya mkopo vinavyopendekezwa")}>
         <div className="kv mb">
           <span>{L("Average monthly profit (last 3 months)", "Wastani wa faida kwa mwezi (miezi 3)")}</span><Money v={a.profit} />
-          <span>{L("Share of profit for repayments", "Sehemu ya faida kwa marejesho")}</span><span>{Math.round(a.share * 100)}% × {Math.round(a.buffer * 100)}%</span>
+          <span>{L("Average monthly cash from operations", "Wastani wa pesa kutoka biashara kwa mwezi")}</span><Money v={a.cash} />
+          <span>{L("Base used (the lower of the two)", "Msingi uliotumika (kidogo kati ya hivyo viwili)")}</span><Money v={a.base} />
+          <span>{L("Share for repayments", "Sehemu ya marejesho")}</span><span>{Math.round(a.share * 100)}% × {Math.round(a.buffer * 100)}%</span>
           <span>{L("Existing instalments per month", "Marejesho yaliyopo kwa mwezi")}</span><Money v={a.existing.total} />
           <span>{L("Can repay per month", "Uwezo wa kurejesha kwa mwezi")}</span><Money v={a.capacity} />
         </div>
@@ -261,7 +281,7 @@ export function Passport({ business, products, viewer = "business" }) {
             <table className="t">
               <thead><tr><th>{L("Factor", "Kipengele")}</th><th className="num">{L("Weight", "Uzito")}</th><th className="num">{L("Result", "Matokeo")}</th></tr></thead>
               <tbody>
-                {Object.entries(g.score.parts).map(([k, v]) => <tr key={k}><td>{k}</td><td className="num">{g.score.weights[k]}</td><td className="num">{v == null ? "—" : `${round(v * 100)}%`}</td></tr>)}
+                {Object.entries(g.score.parts).map(([k, v]) => <tr key={k}><td>{tl(FACTOR_NAMES[k]) || k}</td><td className="num">{g.score.weights[k]}</td><td className="num">{v == null ? "—" : `${round(v * 100)}%`}</td></tr>)}
               </tbody>
             </table>
           </div>

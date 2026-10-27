@@ -1,12 +1,12 @@
 // Data Admin screens (ADM-02, REP-04, ACC-04, RAT-10, RAT-11, HLP-03, FIN-05).
 import { FileText } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
-import { ACCOUNTS, KINDS, READY_KINDS } from "../../core/kinds.js";
+import { ACCOUNTS, KINDS, READY_KINDS, SUSPENSE_TARGETS } from "../../core/kinds.js";
 import { journal, ledger, openingLines, trialBalance } from "../../core/accounting.js";
 import { FREQUENCIES } from "../../core/credit.js";
 import { bandFor, ratingsFor } from "../../core/rating.js";
 import { money, sum, today } from "../../core/util.js";
-import { answerQuery, assignOfficer, changeTreatment, decideChange, decideDispute, decideHeld, decideOpening, decideOrg, recordRecheck, reverseEntry, reviewExternalLoan, stockAdjust } from "../../lib/actions.js";
+import { answerQuery, assignOfficer, changeTreatment, resolveSuspense, reviewPosted, decideChange, decideDispute, decideHeld, decideOpening, decideOrg, recordRecheck, reverseEntry, reviewExternalLoan, stockAdjust } from "../../lib/actions.js";
 import { businessesInScope } from "../../lib/access.js";
 import { getFile } from "../../lib/files.js";
 import { L, tl } from "../../lib/i18n.js";
@@ -22,7 +22,9 @@ export function approvalCounts(state) {
     external: state.externalLoans.filter((x) => x.status === "submitted").length,
     orgs: [...state.fis, ...state.suppliers].filter((o) => o.status === "pending").length,
     officer: state.businesses.filter((b) => !b.officerId && b.status !== "archived").length,
-    disputes: state.ratings.filter((r) => r.status === "disputed").length
+    disputes: state.ratings.filter((r) => r.status === "disputed").length,
+    suspense: state.closes.filter((c) => Math.abs(c.open || 0) > 0.004).length,
+    review: state.entries.filter((e) => e.review?.status === "open" && e.status === "posted").length
   };
   c.total = Object.values(c).reduce((a, b) => a + b, 0);
   return c;
@@ -49,8 +51,11 @@ export function Approvals() {
   const officers = state.users.filter((u) => u.role === "officer" && u.active !== false);
   const tabs = [
     ["held", L("Held entries", "Miamala iliyosimamishwa")], ["opening", L("Starting positions", "Hali za kuanzia")], ["changes", L("Changes and corrections", "Mabadiliko na marekebisho")],
-    ["external", L("Declared loans", "Mikopo iliyotajwa")], ["orgs", L("New lenders and suppliers", "Wakopeshaji na wasambazaji wapya")], ["officer", L("No officer", "Bila afisa")], ["disputes", L("Rating disputes", "Mapingamizi ya viwango")]
+    ["external", L("Declared loans", "Mikopo iliyotajwa")], ["orgs", L("New lenders and suppliers", "Wakopeshaji na wasambazaji wapya")], ["officer", L("No officer", "Bila afisa")], ["disputes", L("Rating disputes", "Mapingamizi ya viwango")],
+    ["suspense", L("Cash differences to resolve", "Tofauti za pesa za kutatua")], ["review", L("Accountant review", "Mapitio ya mhasibu")]
   ];
+  const [target, setTarget] = useState("");
+  const [amount, setAmount] = useState("");
   return (
     <div className="stack">
       <Tabs value={tab} onChange={setTab} tabs={tabs.map(([value, label]) => ({ value, label, count: counts[value] }))} />
@@ -126,6 +131,31 @@ export function Approvals() {
         </Card>
       )) : <Empty text={L("Every business has an officer.", "Kila biashara ina afisa.")} />)}
       {tab === "disputes" && <RatingReview initial="disputes" embedded />}
+      {tab === "suspense" && (counts.suspense ? state.closes.filter((c) => Math.abs(c.open || 0) > 0.004).map((c) => {
+        const b = state.businesses.find((x) => x.id === c.businessId);
+        const side = c.open > 0 ? "over" : "short";
+        return (
+          <Card key={c.id} title={`${b?.profile.businessName} · ${money(Math.abs(c.open))}`}>
+            <p className="small muted">{L("Closed", "Imefungwa")} {fmtDate(c.from)}{c.from !== c.to ? ` – ${fmtDate(c.to)}` : ""} · {side === "over" ? L("more money counted than the records", "pesa zaidi ya kumbukumbu") : L("less money counted than the records", "pesa pungufu ya kumbukumbu")}</p>
+            {c.resolutions?.length > 0 && <div className="small mt">{c.resolutions.map((r, i) => <div key={i}>{fmtDate(r.at)} · {money(r.amount)} → {tl(SUSPENSE_TARGETS[side].find((t) => t.acc === r.resolveTo))} · {r.reason}</div>)}</div>}
+            <button className="btn primary mt" onClick={() => { setTarget(SUSPENSE_TARGETS[side][0].acc); setAmount(Math.abs(c.open)); setModal({ type: "suspense", c, side }); }}>{L("Resolve", "Tatua")}</button>
+          </Card>
+        );
+      }) : <Empty text={L("No cash differences waiting.", "Hakuna tofauti za pesa zinazosubiri.")} />)}
+      {tab === "review" && (counts.review ? state.entries.filter((e) => e.review?.status === "open" && e.status === "posted").map((e) => {
+        const b = state.businesses.find((x) => x.id === e.businessId);
+        return (
+          <Card key={e.id} title={`${b?.profile.businessName} · ${money(e.amount)}`}>
+            <p><b>{kindPlain(e.kind)}</b></p>
+            <p className="small muted">{fmtDate(e.date)} · “{e.description}” · {sourceLabel(e.source)}</p>
+            <p className="small mt">{e.review.reason === "ready" ? L("Chosen from the ready list after the reading failed", "Imechaguliwa kwenye orodha baada ya usomaji kushindwa") : e.review.reason === "override" ? L("The business chose a different meaning from the AI's reading", "Biashara ilichagua maana tofauti na usomaji wa AI") : L("Read with low confidence", "Imesomwa kwa uhakika mdogo")}{e.ai?.suggested ? ` · ${L("AI suggested", "AI ilipendekeza")}: ${kindPlain(e.ai.suggested)}` : ""}</p>
+            <div className="row mt">
+              <button className="btn" onClick={() => { setKind(e.kind); setModal({ type: "review", e, decision: "change" }); }}>{L("Change treatment", "Badilisha uingizaji")}</button>
+              <button className="btn primary" onClick={() => setModal({ type: "review", e, decision: "confirm" })}>{L("Confirm as posted", "Thibitisha kama ilivyo")}</button>
+            </div>
+          </Card>
+        );
+      }) : <Empty text={L("Nothing to review.", "Hakuna cha kupitia.")} />)}
 
       {modal?.type === "held" && (
         <ReasonModal title={modal.decision === "decline" ? L("Decline entry", "Kataa muamala") : modal.decision === "change" ? L("Change and post", "Badilisha na ingiza") : L("Approve entry", "Idhinisha muamala")} danger={modal.decision === "decline"} onClose={() => setModal(null)} onSubmit={(reason) => act((d) => decideHeld(d, user, modal.e.id, modal.decision, { kind, reason }), L("Done", "Imefanyika"))}>
@@ -136,6 +166,17 @@ export function Approvals() {
       {modal?.type === "change" && <ReasonModal title={modal.approve ? L("Approve change", "Idhinisha mabadiliko") : L("Decline change", "Kataa mabadiliko")} danger={!modal.approve} onClose={() => setModal(null)} onSubmit={(reason) => act((d) => decideChange(d, user, modal.c.id, modal.approve, reason), L("Done", "Imefanyika"))} />}
       {modal?.type === "external" && <ReasonModal title={modal.archive ? L("Archive declared loan", "Hifadhi mkopo uliotajwa") : L("Mark declared loan reviewed", "Weka mkopo uliotajwa umekaguliwa")} onClose={() => setModal(null)} onSubmit={(reason) => act((d) => reviewExternalLoan(d, user, modal.x.id, ext[modal.x.id] || {}, reason, modal.archive), L("Done", "Imefanyika"))} />}
       {modal?.type === "org" && <ReasonModal title={modal.approve ? L("Approve organisation", "Idhinisha taasisi") : L("Decline organisation", "Kataa taasisi")} danger={!modal.approve} onClose={() => setModal(null)} onSubmit={(reason) => act((d) => decideOrg(d, user, modal.o.kind, modal.o.id, modal.approve, reason), L("Done", "Imefanyika"))} />}
+      {modal?.type === "suspense" && (
+        <ReasonModal title={L("Resolve cash difference", "Tatua tofauti ya pesa")} onClose={() => setModal(null)} onSubmit={(reason) => act((d) => resolveSuspense(d, user, modal.c.id, target, amount, reason), L("Resolved", "Imetatuliwa"))}>
+          <Field label={L("What it was", "Ilikuwa nini")}><Select value={target} onChange={setTarget} options={SUSPENSE_TARGETS[modal.side].map((t) => ({ value: t.acc, label: tl(t) }))} /></Field>
+          <Field label={L("Amount (TZS)", "Kiasi (TZS)")}><AmountInput value={amount} onChange={setAmount} /></Field>
+        </ReasonModal>
+      )}
+      {modal?.type === "review" && (
+        <ReasonModal title={modal.decision === "change" ? L("Change treatment", "Badilisha uingizaji") : L("Confirm entry", "Thibitisha muamala")} onClose={() => setModal(null)} onSubmit={(reason) => act((d) => reviewPosted(d, user, modal.e.id, modal.decision, { kind, reason }), L("Done", "Imefanyika"))}>
+          {modal.decision === "change" && <Field label={L("Post as", "Ingiza kama")}><Select value={kind} onChange={setKind} options={READY_KINDS.map((k) => ({ value: k, label: kindPlain(k) }))} /></Field>}
+        </ReasonModal>
+      )}
       {modal?.type === "assign" && (
         <ReasonModal title={`${L("Assign officer", "Panga afisa")}: ${modal.b.profile.businessName}`} onClose={() => setModal(null)} onSubmit={(reason) => (officerId ? act((d) => assignOfficer(d, user, modal.b.id, officerId, reason), L("Officer assigned", "Afisa amepangwa")) : false)}>
           <Field label={L("Officer", "Afisa")}><Select value={officerId} onChange={setOfficerId} placeholder={L("Choose", "Chagua")} options={officers.map((o) => ({ value: o.id, label: o.name }))} /></Field>

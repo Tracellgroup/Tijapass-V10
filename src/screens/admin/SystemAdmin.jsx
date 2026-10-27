@@ -3,7 +3,8 @@ import { Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { annualFromMonthly, canAssignTier, sponsorCounts } from "../../core/billing.js";
 import { DEFAULT_SETTINGS } from "../../core/seed.js";
-import { money, uid } from "../../core/util.js";
+import { money, today, uid } from "../../core/util.js";
+import { buildTestData, loadTestData, removeTestData } from "../../lib/testData.js";
 import { audit, generateSampleActivity } from "../../lib/actions.js";
 import { ROLE_NAMES } from "../../lib/access.js";
 import { clearFiles } from "../../lib/files.js";
@@ -57,12 +58,12 @@ export function Users() {
 export function AdminPackages() {
   const { state, user } = useStore();
   const act = useAction();
-  const [pk, setPk] = useState(() => structuredClone(state.packages));
+  const [pk, setPk] = useState(() => ({ ...structuredClone(state.packages), fees: { ...state.settings.fiFees } }));
   const [reason, setReason] = useState("");
   const [tierFor, setTierFor] = useState(null);
   const [tier, setTier] = useState("");
   const counts = sponsorCounts(state);
-  const save = () => act((d) => { const before = d.packages; for (const p of pk.fi) p.annual = annualFromMonthly(p.monthly); d.packages = pk; audit(d, user, "Packages and prices changed", "packages", { before, after: pk, reason }); }, L("Prices saved", "Bei zimehifadhiwa"));
+  const save = () => act((d) => { const { fees, ...packages } = pk; const before = { packages: d.packages, fees: d.settings.fiFees }; for (const p of packages.fi) p.annual = annualFromMonthly(p.monthly); d.packages = packages; d.settings.fiFees = fees; audit(d, user, "Packages and prices changed", "packages", { before, after: pk, reason }); }, L("Prices saved", "Bei zimehifadhiwa"));
   const setBiz = (i, k, v) => setPk({ ...pk, business: pk.business.map((p, j) => (j === i ? { ...p, [k]: v } : p)) });
   const setFi = (i, k, v) => setPk({ ...pk, fi: pk.fi.map((p, j) => (j === i ? { ...p, [k]: v } : p)) });
   return (
@@ -81,6 +82,15 @@ export function AdminPackages() {
           {pk.fi.map((p, i) => <tr key={p.id}><td>{tl(p)}</td><td><AmountInput value={p.monthly} onChange={(v) => setFi(i, "monthly", Number(v) || 0)} /></td><td className="num">{money(annualFromMonthly(p.monthly))}</td><td><AmountInput value={p.perAssessment} onChange={(v) => setFi(i, "perAssessment", Number(v) || 0)} /></td></tr>)}
         </tbody></table></div>
         <p className="small muted mt">{L("Assessments are unlimited; each one is charged at the package rate.", "Tathmini hazina kikomo; kila moja inalipiwa kwa kiwango cha kifurushi.")}</p>
+      </Card>
+      <Card title={L("Optional lender services", "Huduma za hiari kwa wakopeshaji")}>
+        <p className="small muted mb">{L("Off until agreed with partners. When on, they appear on lenders' monthly bills.", "Zimezimwa hadi zikubaliwe na washirika. Zikiwashwa, zinaonekana kwenye bili za kila mwezi za wakopeshaji.")}</p>
+        <div className="form two">
+          <label className="check"><input type="checkbox" checked={pk.fees.disbursementOn} onChange={(e) => setPk({ ...pk, fees: { ...pk.fees, disbursementOn: e.target.checked } })} />{L("Disbursement service fee", "Ada ya huduma ya utoaji")}</label>
+          <Field label={L("Disbursement fee (% of amount)", "Ada ya utoaji (% ya kiasi)")}><input className="input" inputMode="decimal" value={pk.fees.disbursementPct} onChange={(e) => setPk({ ...pk, fees: { ...pk.fees, disbursementPct: Number(e.target.value.replace(/[^\d.]/g, "")) || 0 } })} /></Field>
+          <label className="check"><input type="checkbox" checked={pk.fees.collectionOn} onChange={(e) => setPk({ ...pk, fees: { ...pk.fees, collectionOn: e.target.checked } })} />{L("Collection service fee", "Ada ya huduma ya ukusanyaji")}</label>
+          <Field label={L("Collection fee (% of each repayment)", "Ada ya ukusanyaji (% ya kila rejesho)")}><input className="input" inputMode="decimal" value={pk.fees.collectionPct} onChange={(e) => setPk({ ...pk, fees: { ...pk.fees, collectionPct: Number(e.target.value.replace(/[^\d.]/g, "")) || 0 } })} /></Field>
+        </div>
       </Card>
       <Card title={L("Pilot sponsorship tiers", "Ngazi za udhamini wa majaribio")}>
         <div className="table-wrap"><table className="t"><thead><tr><th>{L("Tier", "Ngazi")}</th><th className="num">{L("Contribution", "Mchango")}</th><th className="num">{L("Year 1", "Mwaka 1")}</th><th className="num">{L("Years 2–3", "Miaka 2–3")}</th><th className="num">{L("Used / max", "Imetumika / juu")}</th></tr></thead><tbody>
@@ -107,6 +117,8 @@ export function AdminPackages() {
 }
 
 const SETTING_FIELDS = [
+  ["ratingAutoMin", "Records Rating for automatic loan eligibility", "Kiwango cha ustahiki wa mkopo wa moja kwa moja"], ["ratingReviewMin", "Records Rating allowed with lender review", "Kiwango kinachoruhusiwa kwa mapitio ya mkopeshaji"],
+  ["reviewFloor", "Accountant review of uncertain entries from (TZS)", "Mapitio ya mhasibu kwa miamala isiyo na uhakika kuanzia (TZS)"], ["minCellSize", "Reports: hide figures based on fewer than", "Ripoti: ficha takwimu za chini ya"],
   ["closeToleranceAbs", "Daily close tolerance (TZS)", "Kiwango cha kuvumilia tofauti (TZS)"], ["closeTolerancePct", "Daily close tolerance (% of balance)", "Kiwango cha kuvumilia (% ya salio)"],
   ["differenceFlagLevel", "Flag differences to officer from (TZS)", "Ripoti tofauti kwa afisa kuanzia (TZS)"], ["duplicateWindowMin", "Duplicate time window (minutes)", "Muda wa kurudia (dakika)"],
   ["unusualFactor", "Unusual amount: times the usual", "Kiasi kisicho cha kawaida: mara ya kawaida"], ["unusualFloor", "Unusual amount: at least (TZS)", "Kiasi kisicho cha kawaida: angalau (TZS)"],
@@ -134,8 +146,14 @@ export function Settings() {
         <div className="form two">{["excellent", "good", "okay", "poor"].map((k) => <Field key={k} label={k}><input className="input" inputMode="numeric" value={s.ratingFrequency[k]} onChange={(e) => setS({ ...s, ratingFrequency: { ...s.ratingFrequency, [k]: Number(e.target.value.replace(/\D/g, "")) || 1 } })} /></Field>)}</div>
       </Card>
       <Card title={L("Credit score weights", "Uzito wa alama ya mkopo")}>
-        <div className="form two">{Object.keys(DEFAULT_SETTINGS.scoreWeights).map((k) => <Field key={k} label={k}><input className="input" inputMode="numeric" value={s.scoreWeights[k]} onChange={(e) => setS({ ...s, scoreWeights: { ...s.scoreWeights, [k]: Number(e.target.value.replace(/\D/g, "")) || 0 } })} /></Field>)}</div>
-        <p className="small muted mt">{L("Total", "Jumla")}: {Object.values(s.scoreWeights).reduce((a, b) => a + b, 0)}</p>
+        <p className="small muted mb">{L("V9's five factors are kept; the Records Rating has a small weight because it also gates eligibility. Each score is stored with the weights used.", "Vipengele vitano vya V9 vimebaki; Kiwango cha Kumbukumbu kina uzito mdogo kwa sababu pia kinaamua ustahiki.")}</p>
+        {["first", "repeat"].map((set) => (
+          <div key={set} className="mb">
+            <h3>{set === "first" ? L("First loan", "Mkopo wa kwanza") : L("Repeat borrower", "Mkopaji wa marudio")}</h3>
+            <div className="form two mt">{Object.keys(DEFAULT_SETTINGS.scoreWeights[set]).map((k) => <Field key={k} label={k}><input className="input" inputMode="numeric" value={s.scoreWeights[set][k]} onChange={(e) => setS({ ...s, scoreWeights: { ...s.scoreWeights, [set]: { ...s.scoreWeights[set], [k]: Number(e.target.value.replace(/\D/g, "")) || 0 } } })} /></Field>)}</div>
+            <p className="small muted mt">{L("Total", "Jumla")}: {Object.values(s.scoreWeights[set]).reduce((a, b) => a + b, 0)}</p>
+          </div>
+        ))}
       </Card>
       <Card title={L("Support contacts", "Mawasiliano ya msaada")}>
         <div className="form two">
@@ -239,3 +257,60 @@ export function Audit() {
   );
 }
 
+
+// Super user test-data loader (feedback 27 Oct, item 7).
+export function TestData() {
+  const { state, user, notify } = useStore();
+  const act = useAction();
+  const [files, setFiles] = useState({});
+  const [history, setHistory] = useState(true);
+  const [closes, setCloses] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const loaded = state.businesses.filter((b) => b.testData);
+  const readFile = (f) => new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(String(fr.result)); fr.readAsText(f); });
+  const load = async () => {
+    setBusy(true);
+    try {
+      const get = async (key, name) => (files[key] ? readFile(files[key]) : fetch(`/samples/test-data/${name}`).then((r) => { if (!r.ok) throw new Error(`Missing ${name}`); return r.text(); }));
+      const [profilesCsv, transactionsCsv, ratingsCsv] = await Promise.all([get("profiles", "profiles.csv"), get("transactions", "transactions.csv"), get("ratings", "ratings.csv")]);
+      const built = buildTestData({ profilesCsv, transactionsCsv, ratingsCsv }, { history, closes, todayISO: today(state) });
+      const r = act((d) => loadTestData(d, user, built));
+      if (r) notify(L(`Loaded ${r.businesses} businesses, ${r.entries} entries, ${r.ratings} ratings`, `Imepakia biashara ${r.businesses}, miamala ${r.entries}, viwango ${r.ratings}`));
+    } catch (e) {
+      notify(e.message, true);
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="stack">
+      <div className="notice warn"><b>{L("Test data only", "Data ya majaribio tu")}</b>{L("Loads 10 fictional businesses, their transactions and simulated Records Ratings, all marked as test data. Remove them in one step when testing is done.", "Inapakia biashara 10 za kubuni, miamala yao na Viwango vya Kumbukumbu vya mfano, vyote vikiwa na alama ya majaribio. Viondoe kwa hatua moja majaribio yakiisha.")}</div>
+      <Card title={L("Status", "Hali")}>
+        {loaded.length ? (
+          <div className="stack">
+            <p>{loaded.length} {L("test businesses loaded", "biashara za majaribio zimepakiwa")} · {state.entries.filter((e) => e.testData).length} {L("entries", "miamala")} · {state.ratings.filter((r) => r.testData).length} {L("ratings", "viwango")}</p>
+            <div className="table-wrap"><table className="t"><thead><tr><th>ID</th><th>{L("Business", "Biashara")}</th><th>{L("Sign in (phone / PIN)", "Kuingia (simu / PIN)")}</th><th>{L("Officer", "Afisa")}</th></tr></thead><tbody>
+              {loaded.map((b) => { const u = state.users.find((x) => x.businessId === b.id); return <tr key={b.id}><td className="small">{b.id}</td><td>{b.profile.businessName}<div className="tiny muted">{b.profile.ownerName}</div></td><td className="small">{u?.login} / {u?.pin}</td><td className="small">{state.users.find((x) => x.id === b.officerId)?.name}</td></tr>; })}
+            </tbody></table></div>
+            <button className="btn danger" onClick={() => setConfirm(true)}>{L("Remove all test data", "Ondoa data yote ya majaribio")}</button>
+          </div>
+        ) : <p className="muted">{L("No test data loaded.", "Hakuna data ya majaribio iliyopakiwa.")}</p>}
+      </Card>
+      {!loaded.length && (
+        <Card title={L("Load test data", "Pakia data ya majaribio")}>
+          <p className="small muted mb">{L("Uses the built-in sample files unless you choose your own CSV files in the same format.", "Inatumia mafaili ya mfano yaliyomo isipokuwa uchague mafaili yako ya CSV yenye muundo uleule.")}</p>
+          <div className="form two">
+            {[["profiles", L("Profiles CSV (optional)", "CSV ya wasifu (si lazima)")], ["transactions", L("Transactions CSV (optional)", "CSV ya miamala (si lazima)")], ["ratings", L("Records Ratings CSV (optional)", "CSV ya viwango (si lazima)")]].map(([k, label]) => (
+              <Field key={k} label={label}><input className="input" type="file" accept=".csv,.txt" onChange={(e) => setFiles({ ...files, [k]: e.target.files?.[0] || null })} /></Field>
+            ))}
+          </div>
+          <label className="check mt"><input type="checkbox" checked={history} onChange={(e) => setHistory(e.target.checked)} />{L("Add 6 months of earlier activity (repeats each business's own pattern) so loan journeys can be tested", "Ongeza shughuli za miezi 6 iliyopita (zinarudia mtindo wa kila biashara) ili safari za mikopo zijaribiwe")}</label>
+          <label className="check"><input type="checkbox" checked={closes} onChange={(e) => setCloses(e.target.checked)} />{L("Add daily closes up to yesterday (on time in line with each rating)", "Ongeza kufunga siku hadi jana (kwa wakati kulingana na kila kiwango)")}</label>
+          <button className="btn primary mt" disabled={busy} onClick={load}>{busy ? L("Loading…", "Inapakia…") : L("Load test data", "Pakia data ya majaribio")}</button>
+          <p className="small muted mt"><a href="/samples/test-data/profiles.csv" download>profiles.csv</a> · <a href="/samples/test-data/transactions.csv" download>transactions.csv</a> · <a href="/samples/test-data/ratings.csv" download>ratings.csv</a></p>
+        </Card>
+      )}
+      {confirm && <Confirm title={L("Remove all test data?", "Ondoa data yote ya majaribio?")} danger okLabel={L("Remove", "Ondoa")} body={L("Removes the test businesses and everything linked to them: entries, closes, ratings, loans, messages and alerts. Other data stays.", "Inaondoa biashara za majaribio na kila kitu kinachohusiana nazo: miamala, kufunga siku, viwango, mikopo, ujumbe na taarifa. Data nyingine inabaki.")} onClose={() => setConfirm(false)} onOk={() => act((d) => removeTestData(d, user), L("Test data removed", "Data ya majaribio imeondolewa"))} />}
+    </div>
+  );
+}

@@ -1,6 +1,29 @@
 # TijaPass V10 web MVP · release notes
 
-Built from the *TijaPass V10 Developer Specification* (tabs 1 and 2). V10 is a new code base in the V9 look (navy #071B3D, orange #F86C12, card layout); V9's repository, site and data are untouched. Each line gives the requirement ID and where it lives.
+Built from the *TijaPass V10 Master Functional Specification* (tabs 1 and 2; tab 4 is the acceptance-test matrix). V10 is a new code base in the V9 look (navy #071B3D, orange #F86C12, card layout); V9's repository, site and data are untouched. Each line gives the requirement ID and where it lives.
+
+## Revisions of 27 October 2026 (developer review)
+
+Agreed with TFL after an independent developer reviewed V10. The spec is now the *TijaPass V10 Master Functional Specification*; its decision log and tab 4 (acceptance-test matrix) cover each item.
+
+| Change | Requirements | Where |
+|---|---|---|
+| Recording never blocked by unclosed days; warning banner and "Catch up now"; financing waits until records are reconciled | DAY-08, REC-11, CRD-03 | `Record.jsx`, `Home.jsx`, `Close.jsx`, `credit.js` `reconciliation` |
+| Unexplained count differences go to a `suspense` account; Data Admin resolves them with a reason; within-tolerance differences written off | DAY-07 | `kinds.js`, `accounting.js`, `actions.js` `closeDay` / `resolveSuspense`, Approval queue → Cash differences to resolve |
+| Mchezo, upatu, VICOBA: one clarifying question; early payout above savings owed to the group | REC-09 | `Record.jsx` group step, `accounting.js` `linesFor` |
+| Imported withdrawals and deposits need their purpose; statement evidence grade A–D | IMP-02, IMP-04 | `Record.jsx` `gradeStatement`, `Home.jsx` explain |
+| Risk-based rating sample (half higher-risk, half random) | RAT-06 | `rating.js` `riskOf`, `pickSample` |
+| Rating gate: 70%+ automatic, 50–69% lender's recorded review, below 50% blocked | RAT-13, CRD-03 | `credit.js` `ratingGate`, `gates`; `Fi.jsx` review checkbox and note |
+| V9's five criteria restored, rating weight reduced; repeat weights only once an instalment is due | CRD-01, CRD-02 | `credit.js` `score`, `DEFAULT_WEIGHTS`; Settings → two weight sets |
+| Self-declared entries count half as credit evidence; passport shows how reliable the records are | CRD-01 | `credit.js` `isSupported`, `evidenceMix`; `common.jsx` Passport |
+| Affordability uses the lower of profit and operating cash flow | CRD-04 | `credit.js` `monthlyBase`, `affordability` |
+| Optional FI disbursement and collection fees, off by default | PKG-06 | `billing.js` `fiBill`; Packages and prices → Optional lender services |
+| BOT privacy: minimum group 10, minimum cell 3, complementary suppression, export rules, export log | BOT-01, BOT-07 | `kpi.js`, `Kpi.jsx` |
+| Baseline corrections keep the original answers | ONB-06 | `actions.js` `correctBaseline`; Officer → business file |
+| 6-digit PINs (OTP and MFA in the live pilot) | ROLE-01 | `Onboard.jsx`, `SignIn.jsx` |
+| Accountant review after posting for material uncertain entries | REC-12 | `actions.js` `addEntry` / `reviewPosted`; Approval queue → Accountant review |
+| Super user test-data loader: 10 businesses, 100 transactions, 8 ratings; load and remove | Tab 2, Test data | `src/lib/testData.js`, `SystemAdmin.jsx` `TestData`, `public/samples/test-data/` |
+| Stage 2 = installable web app (PWA) plus secure backend; native apps later | Tab 3 | Spec only |
 
 ## Biggest changes from V9
 
@@ -125,7 +148,7 @@ Built from the *TijaPass V10 Developer Specification* (tabs 1 and 2). V10 is a n
 | HLP-01 to HLP-04 | Guide per user type with screenshots (`public/guide/en.json`, `sw.json`), searchable FAQ by topic, chat (AI or FAQ) that becomes an Admin query with the chat attached, WhatsApp and phone from Settings |
 | NOT-01, NOT-02 | Bell alerts for close, 09:00 reminder, holds, decisions, ratings, offers, repayments, quotes, answers; officers' weekly list of checks due |
 | MSG-01 | Threads tied to a loan, quote, business file or Admin conversation |
-| BOT-01 to BOT-08 | `src/core/kpi.js`, `src/screens/reports/Kpi.jsx`: aggregated only, minimum group size, priority KPIs first, KPI 2 as two shares, KPI 4 requests vs approvals, three extra tiles, definitions, filters, CSV and PDF export; more Reports users can be added in Users and roles |
+| BOT-01 to BOT-08 | `src/core/kpi.js`, `src/screens/reports/Kpi.jsx`: aggregated only, minimum group and cell size with complementary suppression, priority KPIs first, KPI 2 as two shares, KPI 4 requests vs approvals, three extra tiles, definitions, filters, CSV and PDF export; more Reports users can be added in Users and roles |
 | UX-01 to UX-06 | Kiswahili/English toggle on every screen; V9 brand; plain words on business screens; 320 px layouts and voice input; one "Test version" marker; band names with colours |
 
 ## Web MVP simulations (tab 2)

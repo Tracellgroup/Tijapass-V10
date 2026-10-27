@@ -50,7 +50,7 @@ export function BusinessWizard({ mode, onDone }) {
     [f.businessName.trim() && f.businessType && f.sector && f.region && f.closingTime && fields.filter((x) => x.required).every((x) => f.custom[x.id]), L("Fill in business name, type, sector, region and closing time.", "Jaza jina la biashara, aina, sekta, mkoa na muda wa kufunga.")],
     [f.wallets.every((w) => w.provider) && f.banks.every((b) => b.name), L("Each wallet needs a provider and each bank a name.", "Kila pochi inahitaji mtoa huduma na kila benki jina.")],
     [f.baseline.bank && f.baseline.mobile && f.baseline.borrowed && f.baseline.sources.length && f.baseline.needFinance && (f.baseline.needFinance === "no" || f.baseline.needAmount), L("Answer every question.", "Jibu kila swali.")],
-    [/^\d{4}$/.test(f.pin) && f.pin === f.pin2 && f.consent, L("Choose a 4-digit PIN, repeat it, and give consent.", "Chagua PIN ya tarakimu 4, irudie, na toa ridhaa.")]
+    [/^\d{6}$/.test(f.pin) && f.pin === f.pin2 && f.consent, L("Choose a 6-digit PIN, repeat it, and give consent.", "Chagua PIN ya tarakimu 6, irudie, na toa ridhaa.")]
   ];
   const ok = Boolean(errors[step][0]);
 
@@ -167,8 +167,8 @@ export function BusinessWizard({ mode, onDone }) {
       {step === 4 && (
         <div className="form">
           <div className="form two">
-            <Field label={L("Choose a 4-digit PIN *", "Chagua PIN ya tarakimu 4 *")}><input className="input" type="password" inputMode="numeric" maxLength={4} value={f.pin} onChange={(e) => set("pin", e.target.value.replace(/\D/g, ""))} /></Field>
-            <Field label={L("Repeat the PIN *", "Rudia PIN *")}><input className="input" type="password" inputMode="numeric" maxLength={4} value={f.pin2} onChange={(e) => set("pin2", e.target.value.replace(/\D/g, ""))} /></Field>
+            <Field label={L("Choose a 6-digit PIN *", "Chagua PIN ya tarakimu 6 *")}><input className="input" type="password" inputMode="numeric" maxLength={6} value={f.pin} onChange={(e) => set("pin", e.target.value.replace(/\D/g, ""))} /></Field>
+            <Field label={L("Repeat the PIN *", "Rudia PIN *")}><input className="input" type="password" inputMode="numeric" maxLength={6} value={f.pin2} onChange={(e) => set("pin2", e.target.value.replace(/\D/g, ""))} /></Field>
           </div>
           <p className="tiny muted">{L("Test version: use a made-up PIN, never a real one.", "Toleo la majaribio: tumia PIN ya kubuni, si halisi.")}</p>
           <div className="notice">

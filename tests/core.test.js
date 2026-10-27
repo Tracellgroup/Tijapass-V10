@@ -187,11 +187,13 @@ test("RAT-09: not checked, then overdue after 45 days", () => {
   assert.equal(ratingStatus(s, b, "2026-09-20").state, "overdue");
 });
 
-test("CRD-03: no loan offer below Okay", () => {
+test("CRD-03 (revised): Good 70+ is automatic, Okay 50-69 needs lender review, Poor is blocked", () => {
   const { s, b } = world();
   s.ratings.push({ id: "R1", businessId: "B-1", date: "2026-10-20", score: 45, status: "final", createdAt: "x" });
   assert.equal(gates(s, b, T).results.rating, false);
   s.ratings.push({ id: "R2", businessId: "B-1", date: "2026-10-25", score: 55, status: "final", createdAt: "y" });
+  assert.equal(gates(s, b, T).results.rating, "review");
+  s.ratings.push({ id: "R3", businessId: "B-1", date: "2026-10-26", score: 78, status: "final", createdAt: "z" });
   assert.equal(gates(s, b, T).results.rating, true);
 });
 

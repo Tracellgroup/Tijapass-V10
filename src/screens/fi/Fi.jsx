@@ -2,7 +2,7 @@
 import { ChevronRight, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { assessmentFee, fiBill, fiPackage, needsAssessment, sponsorDiscountPct } from "../../core/billing.js";
-import { FREQUENCIES, LOAN_TYPES, affordability, gates, maxInstalments, score, schedule, toMonthly } from "../../core/credit.js";
+import { FREQUENCIES, GATES, LOAN_TYPES, affordability, gates, maxInstalments, score, schedule, toMonthly } from "../../core/credit.js";
 import { ageGroup as kpiAge } from "../../core/kpi.js";
 import { bandFor, latestRating } from "../../core/rating.js";
 import { REGIONS, SECTORS } from "../../core/seed.js";
@@ -180,6 +180,8 @@ export function FiLoan() {
   const [frequency, setFrequency] = useState(l?.frequency || "monthly");
   const [n, setN] = useState("6");
   const [reject, setReject] = useState(false);
+  const [reviewed, setReviewed] = useState(false);
+  const [reviewNote, setReviewNote] = useState("");
   if (!l || !b) return <Empty text={L("Loan not found.", "Mkopo haupatikani.")} />;
   const consented = b.consent?.fis?.[fi.id]?.granted;
   const g = gates(state, b, t);
@@ -207,7 +209,15 @@ export function FiLoan() {
       </Card>
       {l.status === "requested" && consented && (
         <Card title={L("Make an offer", "Toa ofa")}>
-          {!g.passed && <p className="notice bad mb"><b>{L("Checks not met: no offer possible yet", "Vigezo havijatimia: ofa haiwezekani bado")}</b>{Object.keys(g.results).filter((k) => !g.results[k]).map((k) => <div key={k}>✗ {tl({ score: { en: "Score below qualifying level", sw: "Alama chini ya kiwango" }, kyc: { en: "Profile, ID or consent incomplete", sw: "Wasifu, kitambulisho au ridhaa havijakamilika" }, records: { en: "Fewer than 30 entries or 3 months", sw: "Chini ya miamala 30 au miezi 3" }, overdue: { en: "Overdue TijaPass repayments", sw: "Marejesho yaliyochelewa" }, external: { en: "Declared loans not yet reviewed", sw: "Mikopo iliyotajwa haijakaguliwa" }, profit: { en: "No positive profit over 3 months", sw: "Hakuna faida chanya miezi 3" }, rating: { en: "Records Rating below Okay, not checked or overdue", sw: "Kiwango chini ya Wastani, hakijakaguliwa au kimechelewa" } }[k])}</div>)}</p>}
+          {!g.passed && !g.needsReview && <p className="notice bad mb"><b>{L("Checks not met: no offer possible yet", "Vigezo havijatimia: ofa haiwezekani bado")}</b>{Object.keys(g.results).filter((k) => g.results[k] !== true).map((k) => <div key={k}>✗ {tl(GATES[k])}</div>)}</p>}
+          {g.needsReview && (
+            <div className="notice warn mb">
+              <b>{L("Records Rating is Okay (50–69): your own review is required", "Kiwango ni Wastani (50–69): mapitio yako yanahitajika")}</b>
+              {L("All other checks are met. Review the business's statements, rating details and evidence, then record what you checked. Your review is kept with the offer.", "Vigezo vingine vyote vimetimia. Pitia taarifa za biashara, kiwango na ushahidi, kisha andika ulichokagua. Mapitio yako yanahifadhiwa pamoja na ofa.")}
+              <label className="check mt"><input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} />{L("I have reviewed this business's records myself", "Nimekagua kumbukumbu za biashara hii mwenyewe")}</label>
+              <textarea className="input mt" rows={2} placeholder={L("What you checked and why you are comfortable (at least 10 characters)", "Ulichokagua na kwa nini unaridhika (angalau herufi 10)")} value={reviewNote} onChange={(e) => setReviewNote(e.target.value)} />
+            </div>
+          )}
           <div className="form two">
             <Field label={L("Product", "Bidhaa")}><Select value={productId} onChange={setProductId} options={products.map((p) => ({ value: p.id, label: `${p.name} · ${p.annualRate}%` }))} /></Field>
             <Field label={L("Amount (TZS)", "Kiasi (TZS)")} hint={product ? `${money(product.min)} – ${money(product.max)}` : null}><AmountInput value={principal} onChange={setPrincipal} /></Field>
@@ -227,10 +237,11 @@ export function FiLoan() {
           )}
           <div className="row mt">
             <button className="btn danger" onClick={() => setReject(true)}>{L("Do not approve", "Usiidhinishe")}</button>
-            <button className="btn primary" disabled={!g.passed || !fits || !product || Number(principal) < product.min || Number(principal) > product.max} onClick={() => act((d) => makeOffer(d, user, l.id, { fiId: fi.id, product, principal: Number(principal), frequency, instalments: inst }), L("Offer sent", "Ofa imetumwa"))}>{L("Send offer", "Tuma ofa")}</button>
+            <button className="btn primary" disabled={!(g.passed || (g.needsReview && reviewed && reviewNote.trim().length >= 10)) || !fits || !product || Number(principal) < product.min || Number(principal) > product.max} onClick={() => act((d) => makeOffer(d, user, l.id, { fiId: fi.id, product, principal: Number(principal), frequency, instalments: inst, manualReview: g.needsReview ? { reason: reviewNote.trim() } : null }), L("Offer sent", "Ofa imetumwa"))}>{L("Send offer", "Tuma ofa")}</button>
           </div>
         </Card>
       )}
+      {l.offer?.manualReview && <p className="notice"><b>{L("Offered after the lender's own review (Okay rating)", "Ofa baada ya mapitio ya mkopeshaji (kiwango cha Wastani)")}</b>{l.offer.manualReview.reason} · {l.offer.manualReview.by?.name} · {fmtDate(l.offer.manualReview.at)}</p>}
       {l.status === "offered" && <p className="notice">{L("Waiting for the business to accept the offer.", "Inasubiri biashara ikubali ofa.")} {L("Total to repay", "Jumla ya kurejesha")}: {money(l.offer.totalRepay)}</p>}
       {l.status === "accepted" && <Card title={L("Disburse", "Toa mkopo")}><p className="small muted mb">{L("Affordability and the Records Rating are checked again now.", "Uwezo wa kulipa na Kiwango vinakaguliwa tena sasa.")}{l.type === "asset" ? ` ${L("The money goes to the supplier, who then delivers.", "Pesa inaenda kwa msambazaji, kisha anapeleka.")}` : ""}</p><button className="btn primary" onClick={() => act((d) => disburse(d, user, l.id), L("Disbursed (simulated)", "Imetolewa (mfano)"))}>{L("Disburse (simulated)", "Toa (mfano)")} {money(l.offer.principal)}</button></Card>}
       {["disbursed", "repaid"].includes(l.status) && <Card title={L("Loan tracker", "Ufuatiliaji wa mkopo")}><LoanTracker loan={l} business={b} /></Card>}
@@ -322,6 +333,8 @@ export function Billing() {
           <span>{L("Package", "Kifurushi")}</span><span>{tl(fiPackage(state, fi))} · {fi.billing}</span>
           <span>{L("Subscription", "Usajili")}</span><span>{money(bill.subscriptionFull)}{bill.discount ? ` − ${bill.discount}% = ${money(bill.subscription)}` : ""}</span>
           <span>{L("Assessments", "Tathmini")}</span><span>{bill.assessments.length} · {money(bill.assessmentTotal)}</span>
+          {state.settings.fiFees?.disbursementOn && <><span>{L("Disbursement service", "Huduma ya utoaji")} ({state.settings.fiFees.disbursementPct}%)</span><span>{bill.disbursements.length} · {money(bill.disbursementTotal)}</span></>}
+          {state.settings.fiFees?.collectionOn && <><span>{L("Collection service", "Huduma ya ukusanyaji")} ({state.settings.fiFees.collectionPct}%)</span><span>{bill.collections.length} · {money(bill.collectionTotal)}</span></>}
           <span><b>{L("Total", "Jumla")}</b></span><span>{money(bill.total)}</span>
         </div>
         <div className="table-wrap mt"><table className="t"><thead><tr><th>{L("Date", "Tarehe")}</th><th>{L("Business", "Biashara")}</th><th className="num">{L("Fee", "Ada")}</th></tr></thead><tbody>

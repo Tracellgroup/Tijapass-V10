@@ -2,7 +2,7 @@
 import {
   Activity, BadgeCheck, BarChart3, Building2, ClipboardCheck, ClipboardList, CreditCard, FileBarChart, FileSearch, Filter,
   HandCoins, Download, HelpCircle, Home, Inbox, Landmark, LayoutDashboard, ListChecks, MessageSquare, Package, PenLine,
-  ScrollText, Settings, ShieldCheck, ShoppingCart, SlidersHorizontal, Store, Tags, Truck, UserCircle, UserPlus, Users, Wallet, BookOpen
+  ScrollText, Settings, Database, ShieldCheck, ShoppingCart, SlidersHorizontal, Store, Tags, Truck, UserCircle, UserPlus, Users, Wallet, BookOpen
 } from "lucide-react";
 
 const m = (id, en, sw, icon) => ({ id, en, sw, icon });
@@ -75,7 +75,7 @@ export const MENUS = {
   officer: [...OFFICER, HELP],
   dataAdmin: [...DATA_ADMIN, HELP],
   systemAdmin: [...SYSTEM_ADMIN, HELP],
-  super: [...SYSTEM_ADMIN, m("kpi", "KPI dashboard", "Dashibodi ya viashiria", BarChart3), HELP],
+  super: [...SYSTEM_ADMIN, m("kpi", "KPI dashboard", "Dashibodi ya viashiria", BarChart3), m("test-data", "Test data", "Data ya majaribio", Database), HELP],
   reports: [
     m("kpi", "KPI dashboard", "Dashibodi ya viashiria", BarChart3),
     m("kpi-filters", "Filters", "Vichujio", Filter),

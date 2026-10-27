@@ -15,7 +15,7 @@ import { BusinessSuppliers, Help, Messages, OrgProfile, Packages, PendingApprova
 import { BusinessRoute, OffActivity, OffChanges, OffClose, OfficerHome, OfficerOnboard } from "./screens/admin/Officer.jsx";
 import { RatingCheck, RatingDue } from "./screens/admin/RatingCheck.jsx";
 import { AdminLoans, Approvals, Ledger, Queries, RatingReview, approvalCounts } from "./screens/admin/DataAdmin.jsx";
-import { AdminPackages, Audit, Fields, ReportDesign, Settings, Users } from "./screens/admin/SystemAdmin.jsx";
+import { AdminPackages, Audit, Fields, ReportDesign, Settings, TestData, Users } from "./screens/admin/SystemAdmin.jsx";
 import { Billing, Directory, FiBusiness, FiHome, FiLoan, FiLoans, FiSuppliers, Products } from "./screens/fi/Fi.jsx";
 import { SupHome, SupOrders, SupProducts, SupQuotes } from "./screens/supplier/Supplier.jsx";
 import Kpi from "./screens/reports/Kpi.jsx";
@@ -42,7 +42,7 @@ export const ROUTES = {
   "rating-check": { C: RatingCheck, roles: OFF, title: t("Monthly records check", "Ukaguzi wa kumbukumbu wa mwezi") },
   approvals: { C: Approvals, roles: DA }, ledger: { C: Ledger, roles: DA }, "rating-review": { C: RatingReview, roles: DA }, "admin-queries": { C: Queries, roles: DA }, "admin-loans": { C: AdminLoans, roles: DA },
   users: { C: Users, roles: SA }, "admin-packages": { C: AdminPackages, roles: SA }, settings: { C: Settings, roles: SA }, fields: { C: Fields, roles: SA }, "report-design": { C: ReportDesign, roles: SA }, audit: { C: Audit, roles: SA },
-  kpi: { C: Kpi, roles: ["reports", "super"] }, "kpi-filters": { C: () => <Kpi focus="kpi-filters" />, roles: ["reports"] }, "kpi-export": { C: () => <Kpi focus="kpi-export" />, roles: ["reports"] }
+  kpi: { C: Kpi, roles: ["reports", "super"] }, "test-data": { C: TestData, roles: ["super"] }, "kpi-filters": { C: () => <Kpi focus="kpi-filters" />, roles: ["reports"] }, "kpi-export": { C: () => <Kpi focus="kpi-export" />, roles: ["reports"] }
 };
 
 export default function App() {

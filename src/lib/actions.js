@@ -2,9 +2,9 @@
 // Every Admin change carries a reason and lands in the audit trail (ROLE-05).
 import { balancesAt, channelBalances, channelBalance } from "../core/accounting.js";
 import { assessmentFee, needsAssessment } from "../core/billing.js";
-import { GATES, gates, offerFits, schedule } from "../core/credit.js";
-import { isOnTime, shouldFlag } from "../core/dailyClose.js";
-import { KINDS } from "../core/kinds.js";
+import { GATES, gates, isSupported, offerFits, schedule } from "../core/credit.js";
+import { isOnTime, shouldFlag, tolerance } from "../core/dailyClose.js";
+import { KINDS, SUSPENSE_TARGETS } from "../core/kinds.js";
 import { evaluateEntry } from "../core/posting.js";
 import { pickForRecheck } from "../core/rating.js";
 import { addDays, dateRange, nowISO, seeded, today, uid } from "../core/util.js";
@@ -34,7 +34,7 @@ export function createBusiness(d, actor, { id, userId, profile, channels, baseli
   const startDate = today(d);
   d.businesses.push({
     id, status: "active", startDate, closingTime: closingTime || "17:00", createdAt: nowISO(d), createdBy: by(actor),
-    officerId: officerId || null, profile, channels, baseline: { ...baseline, at: nowISO(d) }, opening: null,
+    officerId: officerId || null, profile, channels, baseline: { ...baseline, at: nowISO(d), original: { ...baseline }, corrections: [] }, opening: null,
     consent: { at: nowISO(d), scope: "records, statements, credit passport, Records Rating, officer visits with photos and location", fis: {} },
     lastSignIn: null, lang: lang || "sw", customFields: {}
   });
@@ -124,15 +124,31 @@ export function setConsent(d, actor, businessId, fiId, granted) {
 // ---------------------------------------------------------------- Entries
 export function addEntry(d, actor, entry, { directionConflict = false, aiRecommendation = null } = {}) {
   const e = { status: "posted", createdAt: nowISO(d), createdBy: by(actor), ...entry };
+  e.evidence = isSupported(e) ? "supported" : "declared";
   const ev = evaluateEntry(d, e, { directionConflict });
   if (ev.action === "hold") {
     e.status = "held";
     e.heldReasons = ev.reasons;
     e.aiRecommendation = aiRecommendation;
     adminNotice(d, { en: "Entry held for review", sw: "Muamala umesimamishwa kwa ukaguzi" }, { en: `${e.amount} · ${ev.reasons.join(", ")}`, sw: `${e.amount} · ${ev.reasons.join(", ")}` }, "approvals");
+  } else {
+    // Second stage (accountant review after posting): uncertain readings of material amounts are checked by
+    // a TijaPass accountant without stopping the business (AI proposes, rules post, people review exceptions).
+    const material = Number(e.amount) >= (d.settings.reviewFloor ?? 50000);
+    const uncertain = (e.ai && (e.ai.confidence ?? 1) < 0.6) || e.source === "ready" || (e.ai?.suggested && e.ai.suggested !== e.kind);
+    if (material && uncertain) {
+      e.review = { status: "open", reason: e.source === "ready" ? "ready" : e.ai?.suggested && e.ai.suggested !== e.kind ? "override" : "confidence", aiRecommendation };
+    }
   }
   d.entries.push(e);
   return ev;
+}
+
+export function reviewPosted(d, actor, entryId, decision, { kind, reason } = {}) {
+  const e = d.entries.find((x) => x.id === entryId);
+  if (decision === "change" && kind && kind !== e.kind) changeTreatment(d, actor, entryId, kind, reason);
+  e.review = { ...(e.review || {}), status: decision === "change" ? "changed" : "confirmed", by: by(actor), at: nowISO(d), note: reason };
+  if (decision !== "change") audit(d, actor, "Posted entry confirmed by accountant", entryId, { reason });
 }
 
 export function decideHeld(d, actor, entryId, decision, { kind, reason } = {}) {
@@ -162,7 +178,7 @@ export function reverseEntry(d, actor, entryId, reason) {
 export function changeTreatment(d, actor, entryId, newKind, reason) {
   const e = d.entries.find((x) => x.id === entryId);
   reverseEntry(d, actor, entryId, reason);
-  const fresh = { ...e, id: uid("E"), kind: newKind, reversedBy: undefined, createdAt: nowISO(d), createdBy: by(actor), source: e.source, correctionOf: e.id };
+  const fresh = { ...e, id: uid("E"), kind: newKind, reversedBy: undefined, review: undefined, createdAt: nowISO(d), createdBy: by(actor), source: e.source, correctionOf: e.id, evidence: "supported" };
   d.entries.push(fresh);
   audit(d, actor, "Entry treatment changed", entryId, { before: e.kind, after: newKind, reason });
 }
@@ -180,7 +196,8 @@ export function closeDay(d, actor, { businessId, from, to, counts, reasons, catc
     if (!r.amount) continue;
     d.entries.push({ id: uid("E"), businessId, date: to, kind: r.kind, amount: Math.abs(r.amount), channelId: r.channelId, status: "posted", source: "close", description: r.label, createdAt: nowISO(d), createdBy: by(actor) });
   }
-  // 2. Remaining difference per channel goes to the cash difference account (DAY-07).
+  // 2. Differences within tolerance are accepted (DAY-05); the rest waits in suspense for an authorised
+  //    person to resolve, so unexplained money never lands straight in profit (DAY-07, revised 27 Oct).
   const book = {};
   const diffs = {};
   let remainder = 0;
@@ -189,13 +206,15 @@ export function closeDay(d, actor, { businessId, from, to, counts, reasons, catc
     book[channel.id] = balance;
     const diff = Math.round((counted - balance) * 100) / 100;
     diffs[channel.id] = diff;
-    if (Math.abs(diff) > 0.004) {
-      d.entries.push({ id: uid("E"), businessId, date: to, kind: diff > 0 ? "cash_over" : "cash_short", amount: Math.abs(diff), channelId: channel.id, status: "posted", source: "close", description: "Daily close difference", createdAt: nowISO(d), createdBy: by(actor) });
-      remainder += diff;
-    }
+    if (Math.abs(diff) <= 0.004) continue;
+    const small = Math.abs(diff) <= tolerance(d.settings, balance);
+    const kind = small ? (diff > 0 ? "cash_over_small" : "cash_short_small") : diff > 0 ? "cash_over" : "cash_short";
+    d.entries.push({ id: uid("E"), businessId, date: to, kind, amount: Math.abs(diff), channelId: channel.id, status: "posted", source: "close", description: "Daily close difference", createdAt: nowISO(d), createdBy: by(actor) });
+    if (!small) remainder += diff;
   }
   const closedAt = nowISO(d);
-  const close = { id: uid("K"), businessId, date: to, from, to, counts, book, diffs, remainder, catchUp: Boolean(catchUp), closedAt, onTime: from === to && isOnTime(to, closedAt), by: by(actor) };
+  const close = { id: uid("K"), businessId, date: to, from, to, counts, book, diffs, remainder, open: Math.abs(remainder) > 0.004 ? remainder : 0, resolutions: [], catchUp: Boolean(catchUp), closedAt, onTime: from === to && isOnTime(to, closedAt), by: by(actor) };
+  if (close.open) adminNotice(d, { en: "Cash difference to resolve", sw: "Tofauti ya pesa ya kutatua" }, { en: `${b.profile.businessName}: TZS ${Math.round(remainder).toLocaleString("en-US")} (${to})`, sw: `${b.profile.businessName}: TZS ${Math.round(remainder).toLocaleString("en-US")} (${to})` }, "approvals");
   if (Math.abs(remainder) > 0.004 && shouldFlag(d, businessId, remainder, to)) {
     close.flagged = true;
     notify(d, { officerOf: businessId }, { en: "Cash difference to follow up", sw: "Tofauti ya pesa ya kufuatilia" }, { en: `${b.profile.businessName}: TZS ${Math.round(remainder).toLocaleString("en-US")} unexplained (${to})`, sw: `${b.profile.businessName}: TZS ${Math.round(remainder).toLocaleString("en-US")} haielezeki (${to})` }, "officer-close");
@@ -205,11 +224,43 @@ export function closeDay(d, actor, { businessId, from, to, counts, reasons, catc
   return close;
 }
 
+// Resolve a cash difference held in suspense: an authorised person sends it to the right account, with a reason.
+export function resolveSuspense(d, actor, closeId, resolveTo, amount, reason) {
+  const c = d.closes.find((x) => x.id === closeId);
+  const side = c.open > 0 ? "over" : "short";
+  if (!SUSPENSE_TARGETS[side].some((t) => t.acc === resolveTo)) throw new Error("Choose where the difference belongs.");
+  const amt = Math.min(Math.abs(Number(amount) || 0), Math.abs(c.open));
+  if (!amt) throw new Error("Enter an amount.");
+  if (!reason || reason.trim().length < 5) throw new Error("A reason is required.");
+  d.entries.push({ id: uid("E"), businessId: c.businessId, date: today(d), kind: "suspense_resolve", side, resolveTo, amount: amt, status: "posted", source: "admin", description: `Cash difference of ${c.to} resolved`, reason, closeId, createdAt: nowISO(d), createdBy: by(actor) });
+  c.open = Math.round((c.open - Math.sign(c.open) * amt) * 100) / 100;
+  c.resolutions.push({ at: nowISO(d), by: by(actor), resolveTo, amount: amt, reason });
+  audit(d, actor, "Cash difference resolved", c.businessId, { before: { open: c.open + Math.sign(c.open || 1) * amt }, after: { resolveTo, amount: amt }, reason });
+  notify(d, { businessId: c.businessId }, { en: "A cash difference was resolved", sw: "Tofauti ya pesa imetatuliwa" }, { en: reason, sw: reason }, "activity");
+}
+
+// Baseline answers are corrected through an audited process; the first answers are kept unchanged (ONB-06 revised).
+export function correctBaseline(d, actor, businessId, field, value, reason) {
+  const b = d.businesses.find((x) => x.id === businessId);
+  if (!b.baseline.original) b.baseline.original = { ...b.baseline, corrections: undefined, original: undefined };
+  const before = b.baseline[field];
+  b.baseline[field] = value;
+  b.baseline.corrections = [...(b.baseline.corrections || []), { field, before, after: value, at: nowISO(d), by: by(actor), reason }];
+  audit(d, actor, "Baseline answer corrected", businessId, { before: { [field]: before }, after: { [field]: value }, reason });
+}
+
 // ---------------------------------------------------------------- Records Rating
 export function saveRating(d, actor, rating) {
   const r = { ...rating, status: "final", createdAt: nowISO(d), officer: by(actor) };
   r.recheck = { selected: pickForRecheck(d.settings.recheckRate ?? 0.1) };
   d.ratings.push(r);
+  // Entries the officer confirmed against evidence become supported evidence for credit.
+  for (const item of rating.details?.correctness?.items || []) {
+    if (item.ok === true) {
+      const e = d.entries.find((x) => x.id === item.entryId);
+      if (e) { e.verifiedInRating = r.id; e.evidence = "supported"; }
+    }
+  }
   // RAT-07: errors become correction requests; the rating scores the records as found.
   for (const item of rating.details?.correctness?.items || []) {
     if (item.ok === false) {
@@ -286,17 +337,22 @@ export function requestLoan(d, actor, loan) {
   audit(d, actor, "Loan requested", loan.businessId, { after: { amount: loan.amount, type: loan.type } });
 }
 
-export function makeOffer(d, actor, loanId, { fiId, product, principal, frequency, instalments }) {
+export function makeOffer(d, actor, loanId, { fiId, product, principal, frequency, instalments, manualReview = null }) {
   const l = d.loans.find((x) => x.id === loanId);
   const b = d.businesses.find((x) => x.id === l.businessId);
   const g = gates(d, b, today(d));
-  if (!g.passed) throw new Error(`No offer possible yet. Not met: ${Object.keys(g.results).filter((k) => !g.results[k]).map((k) => GATES[k].en).join("; ")}.`);
+  // Automatic eligibility needs a rating of 70+; 50-69 is allowed only with the lender's own recorded review.
+  const reviewed = g.needsReview && manualReview && String(manualReview.reason || "").trim().length >= 10;
+  if (!g.passed && !reviewed) {
+    if (g.needsReview) throw new Error("Records Rating is Okay (50–69): record your own review of this business's records before offering.");
+    throw new Error(`No offer possible yet. Not met: ${Object.keys(g.results).filter((k) => g.results[k] !== true).map((k) => GATES[k].en).join("; ")}.`);
+  }
   const sc = schedule({ principal, annualRate: product.annualRate, frequency, instalments, feePct: product.feePct, feeFixed: product.feeFixed, start: today(d) });
   if (!offerFits(d, b, sc, frequency, today(d))) throw new Error("The largest instalment does not fit this business's affordability.");
   l.fiId = fiId;
   l.status = "offered";
   l.offeredAt = nowISO(d);
-  l.offer = { productId: product.id, productName: product.name, annualRate: product.annualRate, feePct: product.feePct, feeFixed: product.feeFixed, principal, frequency, instalments, rows: sc.rows, fees: sc.fees, totalRepay: sc.totalRepay, costOfCredit: sc.costOfCredit };
+  l.offer = { manualReview: reviewed ? { ...manualReview, by: by(actor), at: nowISO(d) } : null, productId: product.id, productName: product.name, annualRate: product.annualRate, feePct: product.feePct, feeFixed: product.feeFixed, principal, frequency, instalments, rows: sc.rows, fees: sc.fees, totalRepay: sc.totalRepay, costOfCredit: sc.costOfCredit };
   l.history.push({ at: nowISO(d), event: "offered", by: by(actor) });
   audit(d, actor, "Loan offer made", l.businessId, { after: { principal, totalRepay: sc.totalRepay } });
   notify(d, { businessId: l.businessId }, { en: "You have a loan offer", sw: "Una ofa ya mkopo" }, { en: `Total to repay TZS ${Math.round(sc.totalRepay).toLocaleString("en-US")}`, sw: `Jumla ya kurejesha TZS ${Math.round(sc.totalRepay).toLocaleString("en-US")}` }, "finance");
@@ -325,7 +381,8 @@ export function disburse(d, actor, loanId) {
   const sc = schedule({ principal: l.offer.principal, annualRate: l.offer.annualRate, frequency: l.offer.frequency, instalments: l.offer.instalments, feePct: l.offer.feePct, feeFixed: l.offer.feeFixed, start: today(d) });
   if (!offerFits(d, b, sc, l.offer.frequency, today(d))) throw new Error("This loan no longer fits the business's affordability. Disbursement stopped.");
   const g = gates(d, b, today(d));
-  if (!g.results.rating || !g.results.overdue) throw new Error(`Disbursement stopped. Not met: ${Object.keys(g.results).filter((k) => !g.results[k]).map((k) => GATES[k].en).join("; ")}.`);
+  const ratingOk = g.results.rating === true || (g.results.rating === "review" && l.offer.manualReview);
+  if (!ratingOk || !g.results.overdue || !g.results.reconciled) throw new Error(`Disbursement stopped. Not met: ${["rating", "overdue", "reconciled"].filter((k) => (k === "rating" ? !ratingOk : g.results[k] !== true)).map((k) => GATES[k].en).join("; ")}.`);
   l.schedule = sc.rows;
   l.frequency = l.offer.frequency;
   l.status = "disbursed";
@@ -465,7 +522,8 @@ export function generateSampleActivity(d, actor, businessId, days = 60, onTimeSh
   const start = addDays(today(d), -days);
   b.startDate = start;
   if (b.opening) b.opening.date = start;
-  d.entries = d.entries.filter((e) => !(e.businessId === businessId && e.date < today(d)));
+  // Earlier entries are replaced; daily-close differences and their resolutions go with the closes they belong to.
+  d.entries = d.entries.filter((e) => !(e.businessId === businessId && (e.date < today(d) || e.source === "close" || e.kind === "suspense_resolve")));
   d.closes = d.closes.filter((c) => c.businessId !== businessId);
   const rnd = seeded(`${businessId}-${days}`);
   const cash = b.channels.find((c) => c.type === "cash") || b.channels[0];

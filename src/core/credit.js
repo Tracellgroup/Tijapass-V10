@@ -1,6 +1,6 @@
 // Credit passport and scoring (CRD-01 to CRD-07), affordability and repayment schedules (FIN-04, FIN-05).
-import { bookEntries, incomeStatement } from "./accounting.js";
-import { closesFor } from "./dailyClose.js";
+import { balancesAt, bookEntries, cashFlowDirect, incomeStatement } from "./accounting.js";
+import { unclosedPastDays } from "./dailyClose.js";
 import { ratingStatus } from "./rating.js";
 import { addDays, addMonths, clamp, daysBetween, monthKey, round, sum } from "./util.js";
 
@@ -43,64 +43,113 @@ export function overdueAmount(state, businessId, todayISO) {
   return total;
 }
 
+// Evidence (feedback 27 Oct): every valid entry counts in the accounts, but self-declared entries carry less
+// credit-evidence weight than independently supported ones.
+export function isSupported(e) {
+  return e.evidence === "supported" || Boolean(e.photoId) || Boolean(e.decidedBy) || Boolean(e.verifiedInRating) || (e.source === "import" && ["A", "B"].includes(e.importGrade));
+}
+
+export function evidenceMix(entries) {
+  const supported = entries.filter(isSupported).length;
+  const declared = entries.length - supported;
+  return { supported, declared, total: entries.length, reliability: entries.length ? (supported + 0.5 * declared) / entries.length : 0 };
+}
+
+// V9's five qualification factors are kept (KYC, reliable records, number of records, months of records,
+// repayment record); the Records Rating is added at a small, visible weight so reliability is not counted twice.
+export const DEFAULT_WEIGHTS = {
+  first: { kyc: 20, coverage: 25, records: 25, months: 20, rating: 10, repayment: 0 },
+  repeat: { kyc: 15, coverage: 20, records: 15, months: 10, rating: 5, repayment: 35 }
+};
+
+const recordPoints = (n) => (n >= 300 ? 1 : n >= 100 ? 0.8 : n >= 30 ? 0.5 : (n / 30) * 0.5);
+
 export function score(state, business, todayISO) {
-  const w = state.settings.scoreWeights || { kyc: 10, coverage: 20, records: 15, months: 10, rating: 30, repayment: 15 };
-  const entries = bookEntries(state, business.id, todayISO).filter((e) => !e.contra);
-  const since = business.startDate > addDays(todayISO, -90) ? business.startDate : addDays(todayISO, -90);
-  const span = Math.max(1, daysBetween(since, todayISO));
-  const activeDays = new Set([
-    ...entries.filter((e) => e.date >= since).map((e) => e.date),
-    ...closesFor(state, business.id).filter((c) => c.date >= since).map((c) => c.date)
-  ]);
-  const opMonths = (Number(business.profile?.monthsOperating) || 0) + Math.max(0, Math.floor(daysBetween(business.startDate, todayISO) / 30));
-  const rs = ratingStatus(state, business, todayISO);
+  const entries = bookEntries(state, business.id, todayISO).filter((e) => !e.contra && !["cash_over", "cash_short", "suspense_resolve", "stock_adjust", "loan_interest", "asset_financed"].includes(e.kind));
   const rep = repaymentRecord(state, business.id, todayISO);
+  // Repeat-borrower weights apply once at least one instalment has fallen due; until then the first-loan weights apply.
+  const repeat = loansFor(state, business.id).some((l) => l.disbursedAt) && rep.dueCount > 0;
+  const sets = state.settings.scoreWeights?.first ? state.settings.scoreWeights : DEFAULT_WEIGHTS;
+  const w = repeat ? sets.repeat : sets.first;
+  const months = new Set(entries.map((e) => monthKey(e.date))).size;
+  const rs = ratingStatus(state, business, todayISO);
+  const ev = evidenceMix(entries);
   const parts = {
     kyc: kycCompleteness(business),
-    coverage: clamp(activeDays.size / span, 0, 1),
-    records: clamp(entries.length / 300, 0, 1),
-    months: clamp(opMonths / 12, 0, 1),
+    coverage: ev.reliability,
+    records: recordPoints(entries.length),
+    months: clamp(months / 12, 0, 1),
     rating: rs.state === "rated" ? rs.rating.score / 100 : 0,
-    repayment: rep.share
+    repayment: repeat ? (rep.share ?? 0) : null
   };
-  // First-time borrowers have no repayment record: its weight is shared among the other factors.
-  const keys = Object.keys(parts).filter((k) => parts[k] != null);
+  const keys = Object.keys(parts).filter((k) => parts[k] != null && (w[k] || 0) > 0);
   const totalW = sum(keys, (k) => w[k] || 0);
   const value = totalW ? (sum(keys, (k) => (w[k] || 0) * parts[k]) / totalW) * 100 : 0;
-  return { value: Math.round(value), parts, weights: w, firstTime: rep.share == null, repayment: rep, entries: entries.length, months: new Set(entries.map((e) => monthKey(e.date))).size };
+  return { value: Math.round(value), parts, weights: w, firstTime: !repeat, repayment: rep, entries: entries.length, months, evidence: ev };
 }
 
 export const GATES = {
-  score: { en: "Score at least the qualifying level", sw: "Alama angalau kiwango cha kufuzu" },
-  kyc: { en: "Profile, ID and consent complete", sw: "Wasifu, kitambulisho na ridhaa vimekamilika" },
+  score: { en: "Score at least the qualifying level (70)", sw: "Alama angalau kiwango cha kufuzu (70)" },
+  kyc: { en: "Profile and ID at least 80% complete, with consent", sw: "Wasifu na kitambulisho angalau 80%, pamoja na ridhaa" },
   records: { en: "At least 30 entries over at least 3 months", sw: "Angalau kumbukumbu 30 kwa miezi 3 au zaidi" },
   overdue: { en: "No overdue TijaPass repayments", sw: "Hakuna marejesho ya TijaPass yaliyochelewa" },
-  external: { en: "Declared external loans reviewed by Admin", sw: "Mikopo ya nje iliyotajwa imekaguliwa na Msimamizi" },
-  profit: { en: "Positive profit over the last 3 months", sw: "Faida chanya kwa miezi 3 iliyopita" },
-  rating: { en: "Records Rating Okay or better, and not overdue", sw: "Kiwango cha Kumbukumbu Wastani au zaidi, na si cha muda uliopita" }
+  external: { en: "Declared outside loans verified by Admin", sw: "Mikopo ya nje iliyotajwa imethibitishwa na Msimamizi" },
+  cash: { en: "Cash available for repayments after existing loans", sw: "Pesa ya kurejesha baada ya mikopo iliyopo" },
+  reconciled: { en: "Records reconciled: days closed, cash differences resolved, corrections done", sw: "Kumbukumbu zimelinganishwa: siku zimefungwa, tofauti zimetatuliwa, marekebisho yamefanyika" },
+  rating: { en: "Records Rating Good (70+) for automatic eligibility; Okay (50–69) needs the lender's own review", sw: "Kiwango Nzuri (70+) kwa ustahiki wa moja kwa moja; Wastani (50–69) unahitaji mapitio ya mkopeshaji" }
 };
 
-export function avgMonthlyProfit(state, business, todayISO) {
+// Average monthly profit and operating cash flow over the last 90 days (or since joining).
+export function monthlyBase(state, business, todayISO) {
   const from = business.startDate > addDays(todayISO, -90) ? business.startDate : addDays(todayISO, -90);
-  const days = Math.max(1, daysBetween(from, todayISO));
-  const p = incomeStatement(state, business.id, from, todayISO).profit;
-  return (p / days) * 30;
+  const days = Math.max(1, daysBetween(from, todayISO) + 1);
+  const profit = (incomeStatement(state, business.id, from, todayISO).profit / days) * 30;
+  const cf = cashFlowDirect(state, business.id, from, todayISO).lines;
+  const operating = ["sales", "customers", "otherIn", "suppliers", "expenses"].reduce((t, k) => t + (cf[k] || 0), 0);
+  const cash = (operating / days) * 30;
+  return { profit, cash, base: Math.min(profit, cash), from, days };
+}
+
+export function avgMonthlyProfit(state, business, todayISO) {
+  return monthlyBase(state, business, todayISO).profit;
+}
+
+// Records are reconciled when every past day is closed, cash differences in suspense are resolved,
+// the starting position is approved and no correction request is open.
+export function reconciliation(state, business, todayISO) {
+  const unclosed = unclosedPastDays(state, business, todayISO).length;
+  const suspense = balancesAt(state, business.id, todayISO).suspense || 0;
+  const corrections = (state.changeRequests || []).filter((c) => c.businessId === business.id && c.status === "pending" && ["correction", "stock"].includes(c.type)).length;
+  const opening = business.opening?.status === "approved";
+  const ok = !unclosed && Math.abs(suspense) <= (state.settings.closeToleranceAbs ?? 1000) && !corrections && opening;
+  return { ok, unclosed, suspense, corrections, opening };
+}
+
+export function ratingGate(state, business, todayISO) {
+  const rs = ratingStatus(state, business, todayISO);
+  if (rs.state !== "rated") return false;
+  if (rs.rating.score >= (state.settings.ratingAutoMin ?? 70)) return true;
+  if (rs.rating.score >= (state.settings.ratingReviewMin ?? 50)) return "review";
+  return false;
 }
 
 export function gates(state, business, todayISO) {
   const s = score(state, business, todayISO);
-  const rs = ratingStatus(state, business, todayISO);
   const ext = (state.externalLoans || []).filter((x) => x.businessId === business.id && !x.archived);
+  const a = affordability(state, business, todayISO);
   const res = {
     score: s.value >= (state.settings.qualifyScore ?? 70),
-    kyc: kycCompleteness(business) >= 1 && Boolean(business.consent?.at),
+    kyc: kycCompleteness(business) >= 0.8 && Boolean(business.consent?.at),
     records: s.entries >= 30 && s.months >= 3,
     overdue: overdueAmount(state, business.id, todayISO) === 0,
     external: ext.every((x) => x.status === "reviewed"),
-    profit: avgMonthlyProfit(state, business, todayISO) > 0,
-    rating: rs.state === "rated" && rs.rating.score >= 50
+    cash: a.capacity > 0,
+    reconciled: reconciliation(state, business, todayISO).ok,
+    rating: ratingGate(state, business, todayISO)
   };
-  return { results: res, passed: Object.values(res).every(Boolean), score: s };
+  const others = Object.keys(res).filter((k) => k !== "rating").every((k) => res[k] === true);
+  // passed: automatic eligibility; needsReview: everything met except a rating of Okay (lender must review).
+  return { results: res, passed: others && res.rating === true, needsReview: others && res.rating === "review", score: s };
 }
 
 export const toMonthly = (amount, frequency) => (frequency === "daily" ? amount * 30 : frequency === "weekly" ? (amount * 52) / 12 : amount);
@@ -126,12 +175,13 @@ export function repaymentShare(state, businessId, todayISO) {
 }
 
 export function affordability(state, business, todayISO) {
-  const profit = avgMonthlyProfit(state, business, todayISO);
+  const m = monthlyBase(state, business, todayISO);
   const share = repaymentShare(state, business.id, todayISO);
   const existing = existingMonthlyInstalments(state, business.id, todayISO);
   const buffer = state.settings.cashBuffer ?? 0.8;
-  const capacity = Math.max(0, profit * buffer * share - existing.total);
-  return { profit, share, buffer, existing, capacity: round(capacity) };
+  // Conservative base: the lower of profit and operating cash flow (feedback 27 Oct).
+  const capacity = Math.max(0, Math.max(0, m.base) * buffer * share - existing.total);
+  return { profit: m.profit, cash: m.cash, base: m.base, share, buffer, existing, capacity: round(capacity) };
 }
 
 export function maxInstalments(state, businessId, frequency) {

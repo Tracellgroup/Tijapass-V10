@@ -46,12 +46,21 @@ export const DEFAULT_SETTINGS = {
   recheckRate: 0.1,
   recheckGapFlag: 15,
   visitDistanceFlagM: 500,
-  minGroupSize: 5,
+  minGroupSize: 10,
+  minCellSize: 3,
   activeMinDays: 10,
   youthMaxAge: 35,
   qualifyScore: 70,
   cashBuffer: 0.8,
-  scoreWeights: { kyc: 10, coverage: 20, records: 15, months: 10, rating: 30, repayment: 15 },
+  scoreWeights: {
+    first: { kyc: 20, coverage: 25, records: 25, months: 20, rating: 10, repayment: 0 },
+    repeat: { kyc: 15, coverage: 20, records: 15, months: 10, rating: 5, repayment: 35 }
+  },
+  ratingAutoMin: 70,
+  ratingReviewMin: 50,
+  reviewFloor: 50000,
+  // Optional FI services kept for partner negotiation; off until agreed (PKG-06 as revised 27 Oct).
+  fiFees: { disbursementOn: false, disbursementPct: 1.5, collectionOn: false, collectionPct: 2 },
   quarterlyDays: 90,
   support: { whatsapp: "+255 700 000 000", phone: "+255 700 000 000", hours: "Mon–Sat 08:00–18:00" },
   customFields: [],

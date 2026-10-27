@@ -60,11 +60,21 @@ export function linesFor(entry, balances = {}) {
   const resolve = (a) => (a === "CH" ? channelAccount(entry.channelId) : a === "TO" ? channelAccount(entry.toChannelId) : a);
   let lines;
   if (entry.kind === "group_payout") {
+    // Payout first returns what the owner saved. Any excess is a share-out (other income) only when the owner
+    // has finished contributing for the round; an early rotating payout is money owed back to the group.
     const saved = Math.max(0, balances.groupSavings || 0);
     const fromSavings = Math.min(saved, amt);
     lines = [{ acc: resolve("CH"), dr: amt, cr: 0 }];
     if (fromSavings) lines.push({ acc: "groupSavings", dr: 0, cr: fromSavings });
-    if (amt - fromSavings) lines.push({ acc: "otherIncome", dr: 0, cr: amt - fromSavings });
+    if (amt - fromSavings) lines.push({ acc: entry.groupMode === "early" ? "groupLoans" : "otherIncome", dr: 0, cr: amt - fromSavings });
+  } else if (entry.kind === "group_contribution" && entry.groupMode === "afterPayout") {
+    // Contributions after an early payout repay what the owner owes the group.
+    lines = [{ acc: "groupLoans", dr: amt, cr: 0 }, { acc: resolve("CH"), dr: 0, cr: amt }];
+  } else if (entry.kind === "suspense_resolve") {
+    // Over: suspense (credit balance) is cleared to the account chosen; short: the account chosen takes the debit.
+    lines = entry.side === "over"
+      ? [{ acc: "suspense", dr: amt, cr: 0 }, { acc: entry.resolveTo, dr: 0, cr: amt }]
+      : [{ acc: entry.resolveTo, dr: amt, cr: 0 }, { acc: "suspense", dr: 0, cr: amt }];
   } else if (entry.kind === "loan_repayment") {
     const shortBal = Math.max(0, -(balances.loansShort || 0));
     const longBal = Math.max(0, -(balances.loansLong || 0));
@@ -159,7 +169,7 @@ export function balanceSheet(state, businessId, asAt) {
   const channels = (business?.channels || []).map((c) => ({ acc: channelAccount(c.id), label: c.name, amount: dr(channelAccount(c.id)) }));
   const assets = [
     ...channels,
-    ...["receivables", "inventory", "groupSavings", "equipment"].map((a) => ({ acc: a, amount: dr(a) }))
+    ...["receivables", "inventory", "groupSavings", "equipment", "suspense"].map((a) => ({ acc: a, amount: dr(a) }))
   ];
   const liabilities = ["payables", "loansShort", "loansLong", "groupLoans"].map((a) => ({ acc: a, amount: crb(a) }));
   const pnlKeys = Object.keys(ACCOUNTS).filter((k) => ["income", "cos", "expense"].includes(ACCOUNTS[k].group));

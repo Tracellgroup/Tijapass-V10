@@ -1,15 +1,21 @@
 // Domain action tests: daily close, holds and decisions, Records Rating gate on offers, packages, assessments, consent.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { balanceSheet, channelBalances, trialBalance } from "../src/core/accounting.js";
+import fs from "node:fs";
+import { balanceSheet, balancesAt, channelBalances, incomeStatement, trialBalance } from "../src/core/accounting.js";
+import { evidenceMix, reconciliation, score, DEFAULT_WEIGHTS } from "../src/core/credit.js";
+import { computeKpis } from "../src/core/kpi.js";
+import { fiBill } from "../src/core/billing.js";
+import { buildTestData, loadTestData, removeTestData } from "../src/lib/testData.js";
 import { activePackage } from "../src/core/billing.js";
 import { initialState } from "../src/core/seed.js";
 import { addDays, today } from "../src/core/util.js";
-import { addEntry, closeDay, createBusiness, decideHeld, generateSampleActivity, logAssessment, makeOffer, payPackage, requestLoan, reverseEntry, saveOpening, decideOpening, saveRating, setConsent } from "../src/lib/actions.js";
+import { addEntry, closeDay, createBusiness, decideHeld, disburse, logAssessment, makeOffer, payPackage, requestLoan, resolveSuspense, respondOffer, reverseEntry, reviewPosted, correctBaseline, saveOpening, decideOpening, setConsent } from "../src/lib/actions.js";
 import { businessesInScope } from "../src/lib/access.js";
 
 const ADMIN = { id: "U-DATA", name: "Data Admin", role: "dataAdmin" };
 const OFF = { id: "U-OFF1", name: "Officer", role: "officer" };
+const SUPER = { id: "U-SUPER", name: "Super user", role: "super" };
 
 function world() {
   const d = initialState(today(null));
@@ -54,19 +60,130 @@ test("held entry: Admin decline keeps it out of the books; reversal balances", (
   assert.ok(d.audit.some((a) => a.action === "Entry reversed" && a.reason));
 });
 
-test("credit gate: Poor rating blocks an offer, Okay allows it", () => {
+function testWorld(history = true) {
+  const d = initialState(today(null));
+  const dir = new URL("../public/samples/test-data/", import.meta.url);
+  const built = buildTestData({ profilesCsv: fs.readFileSync(new URL("profiles.csv", dir), "utf8"), transactionsCsv: fs.readFileSync(new URL("transactions.csv", dir), "utf8"), ratingsCsv: fs.readFileSync(new URL("ratings.csv", dir), "utf8") }, { history, closes: true, todayISO: today(d) });
+  loadTestData(d, SUPER, built);
+  return d;
+}
+const FI = { id: "U-FI1", name: "FI", role: "fi" };
+const offer = (d, loanId, extra = {}) => makeOffer(d, FI, loanId, { fiId: "FI-1", product: d.fis[0].products[0], principal: 200000, frequency: "monthly", instalments: 6, ...extra });
+const ask = (d, id, bid) => requestLoan(d, OFF, { id, businessId: bid, fiId: "FI-1", productId: "P-1", type: "working_capital", amount: 200000, purpose: "stock", frequency: "monthly" });
+
+test("test data: 10 businesses, 100 transactions, 8 ratings load and are removed in one step", () => {
+  const d = testWorld(false);
+  assert.equal(d.businesses.filter((b) => b.testData).length, 10);
+  assert.equal(d.entries.filter((e) => e.testData).length, 100);
+  assert.equal(d.ratings.length, 8);
+  for (const b of d.businesses) { const tb = trialBalance(d, b.id, today(d)); assert.ok(Math.abs(tb.totalDebit - tb.totalCredit) < 0.01); }
+  assert.equal(removeTestData(d, SUPER), 10);
+  assert.equal(d.businesses.length + d.entries.length + d.ratings.length + d.closes.length, 0);
+});
+
+test("credit gate (revised): Good is automatic, Okay needs the lender's recorded review, Poor is blocked", () => {
+  const d = testWorld(true);
+  ask(d, "L1", "TPDEMO-B01"); ask(d, "L4", "TPDEMO-B04"); ask(d, "L8", "TPDEMO-B08");
+  offer(d, "L1");
+  assert.equal(d.loans.find((l) => l.id === "L1").status, "offered");
+  assert.throws(() => offer(d, "L4"), /own review/);
+  offer(d, "L4", { manualReview: { reason: "Checked October statements and receipts with the officer" } });
+  assert.ok(d.loans.find((l) => l.id === "L4").offer.manualReview);
+  assert.throws(() => offer(d, "L8"), /Records Rating/);
+});
+
+test("daily close (revised): unexplained difference waits in suspense, not profit, until resolved", () => {
   const d = world();
-  generateSampleActivity(d, ADMIN, "B1", 95, 1);
-  setConsent(d, OFF, "B1", "FI-1", true);
-  requestLoan(d, OFF, { id: "L1", businessId: "B1", fiId: "FI-1", productId: "P-1", type: "working_capital", amount: 200000, purpose: "stock", frequency: "monthly" });
-  const product = d.fis[0].products[0];
-  const rating = (score) => ({ id: `R${score}`, businessId: "B1", date: today(d), points: { cash: 25, completeness: 0, correctness: 0, timeliness: 15, stock: 0 }, score, details: {} });
-  saveRating(d, OFF, rating(45));
-  assert.throws(() => makeOffer(d, { id: "U-FI1", name: "FI", role: "fi" }, "L1", { fiId: "FI-1", product, principal: 200000, frequency: "monthly", instalments: 6 }), /Records Rating/);
-  saveRating(d, OFF, rating(62));
-  makeOffer(d, { id: "U-FI1", name: "FI", role: "fi" }, "L1", { fiId: "FI-1", product, principal: 200000, frequency: "monthly", instalments: 6 });
-  assert.equal(d.loans[0].status, "offered");
-  assert.ok(d.loans[0].offer.totalRepay > 200000);
+  const t = today(d);
+  addEntry(d, OFF, entry({ date: t, amount: 20000 }));
+  const before = incomeStatement(d, "B1", t, t).profit;
+  const c = closeDay(d, OFF, { businessId: "B1", from: t, to: t, counts: { C1: 95000, C2: 20000 }, reasons: [] });
+  assert.equal(c.open, 25000);
+  assert.equal(incomeStatement(d, "B1", t, t).profit, before, "profit unchanged");
+  assert.equal(balancesAt(d, "B1", t).suspense, -25000);
+  assert.equal(reconciliation(d, biz(d), t).ok, false);
+  resolveSuspense(d, ADMIN, c.id, "sales", 25000, "Owner confirmed an unrecorded sale");
+  assert.equal(Math.round(balancesAt(d, "B1", t).suspense || 0), 0);
+  assert.equal(incomeStatement(d, "B1", t, t).profit, before + 25000);
+});
+
+test("group money (revised): early rotating payout is owed back, not income", () => {
+  const d = world();
+  const t = today(d);
+  addEntry(d, OFF, entry({ date: t, kind: "group_contribution", amount: 10000, channelId: "C1", groupMode: "savings" }));
+  addEntry(d, OFF, entry({ date: t, kind: "group_payout", amount: 50000, channelId: "C1", groupMode: "early" }));
+  const bal = balancesAt(d, "B1", t);
+  assert.equal(bal.groupLoans, -40000);
+  assert.equal(incomeStatement(d, "B1", t, t).profit + 0, 0);
+  addEntry(d, OFF, entry({ date: t, kind: "group_contribution", amount: 10000, channelId: "C1", groupMode: "afterPayout" }));
+  assert.equal(balancesAt(d, "B1", t).groupLoans, -30000);
+});
+
+test("credit score: first-loan weights apply until a repeat borrower's first instalment falls due", () => {
+  const d = testWorld(true);
+  ask(d, "L1", "TPDEMO-B01");
+  offer(d, "L1");
+  respondOffer(d, OFF, "L1", true, "TPDEMO-B01-cash");
+  disburse(d, FI, "L1");
+  const b = d.businesses.find((x) => x.id === "TPDEMO-B01");
+  const sc = score(d, b, today(d));
+  assert.deepEqual(sc.weights, d.settings.scoreWeights?.first || DEFAULT_WEIGHTS.first);
+  assert.equal(sc.parts.repayment ?? null, null);
+});
+
+test("accountant review: an uncertain material entry posts at once, then is confirmed or re-posted with a reason", () => {
+  const d = world();
+  const t = today(d);
+  addEntry(d, OFF, entry({ id: "EB", date: t, kind: "sale_cash", amount: 90000, ai: { confidence: 0.4, suggested: "sale_cash" } }));
+  addEntry(d, OFF, entry({ id: "EA", date: t, kind: "other_expense", amount: 60000, source: "ready" }));
+  addEntry(d, OFF, entry({ id: "EC", date: t, kind: "sale_cash", amount: 5000, source: "ready" }));
+  const get = (id) => d.entries.find((e) => e.id === id);
+  assert.equal(get("EA").status, "posted");
+  assert.equal(get("EA").review.status, "open");
+  assert.equal(get("EB").review.status, "open");
+  assert.equal(get("EC").review, undefined, "below the review floor");
+  reviewPosted(d, ADMIN, "EA", "change", { kind: "drawings", reason: "Owner confirmed this was school fees" });
+  assert.equal(get("EA").reversedBy !== undefined, true);
+  assert.ok(d.entries.some((e) => e.correctionOf === "EA" && e.kind === "drawings" && e.evidence === "supported"));
+  reviewPosted(d, ADMIN, "EB", "confirm", { reason: "Matches the M-Pesa message" });
+  assert.equal(get("EB").review.status, "confirmed");
+  assert.ok(d.audit.some((a) => a.action === "Entry treatment changed") && d.audit.some((a) => a.action === "Posted entry confirmed by accountant"));
+});
+
+test("baseline: a correction keeps the original answers and records who and why", () => {
+  const d = world();
+  correctBaseline(d, ADMIN, "B1", "bank", "unused", "Owner showed a dormant NMB account");
+  const bl = biz(d).baseline;
+  assert.equal(bl.bank, "unused");
+  assert.equal(bl.original.bank, "none");
+  assert.equal(bl.corrections[0].reason, "Owner showed a dormant NMB account");
+});
+
+test("evidence: self-declared entries count half for credit", () => {
+  assert.equal(evidenceMix([{ evidence: "supported" }, { evidence: "declared" }]).reliability, 0.75);
+  assert.equal(evidenceMix([{ photoId: "p" }, { source: "import", importGrade: "A" }]).supported, 2);
+});
+
+test("BOT privacy (revised): complementary suppression hides a filter whose remainder is small", () => {
+  const d = testWorld(false);
+  d.settings.minGroupSize = 5;
+  assert.equal(computeKpis(d, {}, today(d)).hidden, false);
+  const women = computeKpis(d, { gender: "female" }, today(d));
+  assert.equal(women.hidden, false);
+  const dsm = computeKpis(d, { region: "Dar es Salaam" }, today(d));
+  assert.equal(dsm.hidden, true);
+});
+
+test("FI services: disbursement and collection fees appear only when switched on", () => {
+  const d = testWorld(true);
+  ask(d, "L1", "TPDEMO-B01");
+  offer(d, "L1");
+  respondOffer(d, OFF, "L1", true, "TPDEMO-B01-cash");
+  disburse(d, FI, "L1");
+  const mk = today(d).slice(0, 7);
+  assert.equal(fiBill(d, d.fis[0], mk, today(d)).disbursementTotal, 0);
+  d.settings.fiFees.disbursementOn = true;
+  assert.equal(fiBill(d, d.fis[0], mk, today(d)).disbursementTotal, 3000);
 });
 
 test("packages: a failed payment never unlocks; a repeated confirmation never charges twice", () => {

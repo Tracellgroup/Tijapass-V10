@@ -69,7 +69,7 @@ export default function Home() {
       </section>
 
       {missed.length > 0 && (
-        <div className="notice bad"><b>{missed.length === 1 ? L("Yesterday is not closed", "Jana haijafungwa") : L(`${missed.length} days not closed`, `Siku ${missed.length} hazijafungwa`)}</b>{L("Close them before recording today's money.", "Zifunge kabla ya kuandika pesa za leo.")}<div className="mt"><button className="btn primary" onClick={() => go("close")}><Moon size={18} />{L("Close now", "Funga sasa")}</button></div></div>
+        <div className="notice bad"><b>{missed.length === 1 ? L("Yesterday is not closed", "Jana haijafungwa") : L(`${missed.length} days not closed`, `Siku ${missed.length} hazijafungwa`)}</b>{L("You can keep recording. Catch up soon: loans need every day closed.", "Unaweza kuendelea kuandika. Fidia mapema: mikopo inahitaji siku zote zimefungwa.")}<div className="mt"><button className="btn primary" onClick={() => go("close")}><Moon size={18} />{L("Close now", "Funga sasa")}</button></div></div>
       )}
       {!missed.length && due && (
         <div className="notice warn"><b>{L("Close your day?", "Funga siku yako?")}</b>{L(`It is past your closing time (${b.closingTime}). Count your money and close today.`, `Muda wako wa kufunga (${b.closingTime}) umepita. Hesabu pesa zako na ufunge leo.`)}<div className="mt"><button className="btn primary" onClick={() => go("close")}><Moon size={18} />{L("Close my day", "Funga siku yangu")}</button></div></div>
@@ -121,11 +121,11 @@ export function Activity() {
           {pending.map((p) => (
             <div key={`${p.importId}-${p.lineId}`} className="stack">
               <div className="item">
-                <div className="grow"><b>{fmtDate(p.date)}</b><div className="small muted">{p.description || "—"}</div></div>
+                <div className="grow"><b>{fmtDate(p.date)}</b><div className="small muted">{p.description || "—"}</div>{p.suggestTransfer && <div className="small amber">{L("A withdrawal or deposit: was it moved to cash, a payment, or personal use?", "Kutoa au kuweka: ilihamishiwa taslimu, ilikuwa malipo, au matumizi binafsi?")}</div>}</div>
                 <b className={p.dir === "in" ? "green" : "amber"}>{p.dir === "out" ? "−" : ""}{money(p.amount)}</b>
                 {explain !== p.lineId + p.importId && <button className="btn small" onClick={() => setExplain(p.lineId + p.importId)}>{L("Explain", "Eleza")}</button>}
               </div>
-              {explain === p.lineId + p.importId && <EntryForm business={b} fixedDate={p.date} compact initial={{ dir: p.dir, lockDir: true, amount: p.amount, channelId: p.channelId, source: "import", importId: p.importId, importLineId: p.lineId }} onCancel={() => setExplain(null)} onPosted={() => setTimeout(() => setExplain(null), 900)} />}
+              {explain === p.lineId + p.importId && <EntryForm business={b} fixedDate={p.date} compact initial={{ dir: p.dir, lockDir: !p.suggestTransfer, amount: p.amount, channelId: p.channelId, source: "import", importId: p.importId, importLineId: p.lineId }} onCancel={() => setExplain(null)} onPosted={() => setTimeout(() => setExplain(null), 900)} />}
             </div>
           ))}
         </Card>

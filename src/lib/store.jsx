@@ -14,12 +14,22 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const s = JSON.parse(raw);
-      if (s && s.version === SCHEMA_VERSION) return s;
+      if (s && s.version === SCHEMA_VERSION) return migrate(s);
     }
   } catch {
     /* storage unavailable or corrupt: start fresh */
   }
   return initialState(today(null));
+}
+
+// Older saved data gets any settings added since it was saved (keeps testers' data across updates).
+function migrate(s) {
+  const base = initialState(today(null)).settings;
+  s.settings = { ...base, ...s.settings };
+  if (!s.settings.scoreWeights?.first) s.settings.scoreWeights = base.scoreWeights;
+  if (!s.settings.fiFees) s.settings.fiFees = base.fiFees;
+  for (const b of s.businesses || []) if (b.baseline && !b.baseline.original) b.baseline.original = { ...b.baseline };
+  return s;
 }
 
 function readSession() {

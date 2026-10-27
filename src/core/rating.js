@@ -65,13 +65,28 @@ export function timelinessFor(state, business, visitDate) {
   return { tradingDays, onTime, points: scoreTimeliness(onTime, tradingDays) };
 }
 
-// The app, not the officer, picks up to 10 recorded entries at random (RAT-06).
+// The app, not the officer, picks the recorded entries to test (RAT-06). Risk-based: half from the riskiest
+// entries (largest amounts, self-declared, read with low confidence or chosen from the ready list), half at random.
+export function riskOf(e, largeFrom) {
+  let r = 0;
+  if (Number(e.amount) >= largeFrom) r += 2;
+  if (e.evidence !== "supported" && !e.photoId && e.source !== "import") r += 1;
+  if (e.source === "ready" || (e.ai && e.ai.confidence < 0.6) || (e.ai && e.ai.suggested && e.ai.suggested !== e.kind)) r += 1;
+  return r;
+}
+
 export function pickSample(state, business, visitDate, seed, size = 10) {
   const { from, to } = ratingPeriod(business, visitDate);
-  const pool = bookEntries(state, business.id, to, from).filter((e) => !e.contra && e.source !== "opening");
+  const pool = bookEntries(state, business.id, to, from).filter((e) => !e.contra && !["cash_over", "cash_short", "suspense_resolve", "stock_adjust"].includes(e.kind));
   const rnd = seeded(seed);
-  const shuffled = [...pool].sort(() => rnd() - 0.5);
-  return shuffled.slice(0, size).map((e) => e.id);
+  const shuffle = (a) => [...a].map((x) => [rnd(), x]).sort((p, q) => p[0] - q[0]).map((x) => x[1]);
+  const amounts = pool.map((e) => Number(e.amount)).sort((a, b) => a - b);
+  const largeFrom = amounts.length ? amounts[Math.floor(amounts.length * 0.75)] : Infinity;
+  const risky = shuffle(pool.filter((e) => riskOf(e, largeFrom) >= 2));
+  const half = Math.ceil(size / 2);
+  const picked = risky.slice(0, half);
+  const rest = shuffle(pool.filter((e) => !picked.includes(e)));
+  return [...picked, ...rest].slice(0, size).map((e) => e.id);
 }
 
 export function bookFigures(state, business, asAt) {
